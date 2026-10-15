@@ -1,0 +1,18 @@
+{
+  "description": "Proposed explainable watchlist policy; seeded now and evaluated in Sprint 6.",
+  "policy_version": "impact-v1",
+  "rules": {
+    "any": [
+      {"field": "significance", "operator": ">", "value": 600},
+      {"field": "pager_alert", "operator": "in", "value": ["yellow", "orange", "red"]},
+      {"field": "magnitude", "operator": ">=", "value": 6},
+      {"field": "mmi", "operator": ">=", "value": 6},
+      {"field": "tsunami_flag", "operator": "=", "value": 1}
+    ]
+  },
+  "labels": {
+    "pager": "ESTIMATED_IMPACT",
+    "other": "POTENTIAL_IMPACT",
+    "tsunami": "A source flag is not an official tsunami warning."
+  }
+}

@@ -1,0 +1,28 @@
+# Purpose: run offline contract, retry and immutable-capture checks without credentials.
+name: Earthquake code quality
+
+on:
+  push:
+    paths: ['src/quake_pipeline/**', 'tests/**', 'scripts/check_code.py', '.github/workflows/quality.yml']
+  pull_request:
+    paths: ['src/quake_pipeline/**', 'tests/**', 'scripts/check_code.py', '.github/workflows/quality.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check syntax and documentation
+        run: python scripts/check_code.py
+      - name: Test failure handling and deterministic captures
+        run: python -m unittest discover -s tests -v
