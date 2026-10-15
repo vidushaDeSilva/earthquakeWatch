@@ -1,6 +1,6 @@
 # Earthquake Impact Watchlist — project memory and implementation plan
 
-Status: baseline revision 4, 15 October 2026. Sprint 1–2 cloud capture, reconciliation ledger and frozen-capture retry evidence have been provided by the user; the final ledger step of the repeat run has not been shown. Sprint 3 code and offline failure validation are complete; its new deployment and cloud acceptance remain pending. The database and pipeline specification below is the implementation contract for all ten sprints; it refines the initial decisions where explicitly noted.
+Status: baseline revision 5, 15 October 2026. Sprint 1–2 cloud capture and frozen retry are evidenced. User screenshots now evidence Sprint 3 publication acknowledgements for three captures and 22 landed batches; full Sprint 3 fault-drill acceptance is not evidenced. Sprint 4 implementation and 101 offline tests are complete; Databricks deployment and cloud acceptance remain pending. The specification below remains the implementation contract, with explicit refinements recorded per sprint.
 
 ## Goal and constraints
 
@@ -262,13 +262,13 @@ Names below omit `<catalog>.` for readability. Unless nullable is stated, key an
 **11. `bronze.event_versions` — one distinct observed raw event version**
 
 - PK: `source_version_id`.
-- Fields: `source_system` (`usgs`), `source_event_id`, `source_updated_ms BIGINT`, `event_time_ms BIGINT` nullable, `payload_sha256`, `raw_feature_sha256`, `raw_event_json STRING`, `contract_version`, `first_capture_id`, `first_delivery_id`, `first_ingested_at`.
+- Fields: `source_system` (`usgs`), `source_event_id`, `source_updated_ms BIGINT`, `event_time_ms BIGINT` nullable, `payload_sha256`, `raw_feature_sha256`, `raw_event_json STRING`, `contract_version`, `first_capture_id`, `first_delivery_id`, `first_batch_id`, `first_ingested_at`.
 - Insert-only MERGE; later identical deliveries do not overwrite first-seen provenance. Unknown source fields remain in JSON. Retention uses first ingestion time, with a maximum age of 90 days subject to active-processing holds.
 
 **12. `bronze.deliveries` — one broker message, including rejected messages**
 
 - PK: `delivery_id`.
-- Fields: `batch_id` (first successful landing), `stream_generation`, `topic`, `partition INT`, `offset BIGINT`, `kafka_timestamp` nullable, `capture_id` nullable for a malformed envelope, `source_item_id` nullable, `source_version_id` nullable on rejection, `message_sha256`, `received_at`, `disposition` (ACCEPTED/QUARANTINED).
+- Fields: `batch_id` (first successful landing), `stream_generation`, `topic`, `partition INT`, `offset BIGINT`, `kafka_timestamp` nullable, `capture_id` nullable for a malformed envelope, `source_item_id` nullable, `source_item_index BIGINT` nullable, `source_version_id` nullable on rejection, `message_sha256` nullable for Kafka null values, `record_sha256`, `raw_feature_sha256` nullable, `received_at`, `disposition` (ACCEPTED/QUARANTINED).
 - The manifest stores raw message bytes safely; malformed non-UTF8 bytes are base64 encoded for quarantine. If a recovered batch overlaps an earlier batch, verify all manifest delivery IDs exist and match checksums rather than relying only on this first-batch FK.
 
 **13. `bronze.quarantine` — one rejection per delivery/stage/contract revision**
@@ -530,7 +530,7 @@ State machines:
 
 ## J. Current design status
 
-This is a reviewable schema/pipeline specification. Sprint 1–3 code is implemented and offline-validated. The user has supplied cloud evidence for Sprint 1–2 development tables, three captures, no duplicate capture keys and a reused hourly capture. No new Sprint 3 cloud resources, Delta tables, jobs, schedules or retention actions have been deployed by the assistant. Run the delivered Sprint 3 setup and cloud acceptance steps before marking it live-validated. Later physical DDL and pipelines remain assigned to their sprints. Expected design-change triggers: quota measurements, incompatible Free Edition features, source schema changes, and empirical watchlist quality.
+This is the schema/pipeline contract through Sprint 4 implementation. The user has provided source capture/retry evidence and screenshots showing three PUBLISH_ACKED captures (14, 1884 and 33 items) and a 22-row LANDED batch ledger. The earlier 34-item CAPTURED rows are separate historical captures, not evidence of a conflicting count. Full Sprint 3 failure drills are not evidenced. Sprint 4 code and offline acceptance are complete; its DDL/notebooks and cloud acceptance have not been executed by the assistant. No schedules, deletion or retention actions have been enabled. Later Silver/Gold objects remain assigned to their sprints. Expected design-change triggers: quota measurements, unsupported features, source schema changes and watchlist quality.
 
 Additional primary documentation checked for this revision:
 
@@ -610,3 +610,124 @@ To mark Sprint 3 live-validated: copy overlay; create separate Aiven dev topic; 
 - Aiven Free/service parameters and Python SASL: https://aiven.io/docs/products/kafka/free-tier/kafka-free-tier ; https://aiven.io/docs/products/kafka/reference/advanced-params-free-tier ; https://aiven.io/docs/products/kafka/howto/connect-with-python .
 - Databricks Files API and Delta MERGE: https://docs.databricks.com/api/files/v2/list-directory-contents ; https://docs.databricks.com/aws/en/delta/merge .
 - GitHub concurrency: https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency .
+
+
+## M. Sprint 3 additional cloud evidence and Sprint 4 implementation
+
+### User-provided evidence, 15 October 2026
+
+The two most recent screenshots show `ops.captures` with three PUBLISH_ACKED
+captures: significant-month 14, m2p5-month 1884, m2p5-day 33; two earlier day
+captures remain CAPTURED at 34 items each. All accounted counts are still zero.
+A second screenshot shows 22 `ops.batches` rows, with visible examples from both
+partitions in LANDED state. These evidence working Kafka publication, cloud
+landing and ledger import. They do not by themselves prove all fault/replay
+acceptance cases or Bronze processing. Counts are source observations, not
+unique earthquake totals across feeds.
+
+### Sprint 4 delivered files and boundary
+
+Delivered as `earthquake-sprint-04.zip` with complete NEW/REPLACE files under
+`repo-update/`, a manifest and direct installation steps. Integration uses the
+known Sprint 1–3 delivery; the user's latest remote repository was not fetched.
+
+- NEW Databricks notebooks: `sprint_04_setup.py`, self-contained
+  `sprint_04_bronze_library.py`, `sprint_04_process_bronze.py`. The processing
+  notebook loads its sibling helper with `%run`; no custom package installation
+  or direct Databricks-to-Kafka networking is introduced.
+- NEW `databricks/sprint_04_acceptance.sql`, `tests/test_sprint_04.py`,
+  `.github/workflows/bronze-recovery.yml`, `docs/SPRINT_04_HANDOFF.md`.
+- REPLACE `src/quake_pipeline/jobs.py`, `.github/workflows/quality.yml`,
+  `docs/PROJECT_MEMORY.md`. The launcher now defaults to 1800 seconds of bounded
+  polling, configurable by `EQ_LEDGER_WAIT_SECONDS` (60..2400), with aligned
+  HTTP budgets. It waits for the existing Job; timeout does not cancel that run.
+- Setup creates managed, unpartitioned `bronze.event_versions`,
+  `bronze.deliveries`, `bronze.quarantine`, `ops.check_results`.
+- Add `process_bronze` as THIRD task in the SAME `earthquake-dev-handoff-ledger`
+  Job after capture and handoff ledger tasks. Keep max concurrent runs=1; no
+  independent writer. Keep existing `EQ_HANDOFF_LEDGER_JOB_ID`. Bronze recovery
+  invokes that same Job and consumes only existing cloud files, without Kafka.
+
+### Decisions and contract refinements
+
+- Verify exact landing/manifest bytes, raw key/value/header evidence, stream,
+  offset sequence, batch identity and ledger identity before parsing messages.
+  Corrupt/unavailable evidence fails without acknowledgement.
+- Independently re-open frozen source bytes, verify capture hash and count, then
+  compare each envelope with its original ordinal/feature/key/IDs. Only proven
+  source lineage can count toward a capture. Authentic invalid source features
+  are durable quarantined source items; malformed/forged/unknown envelopes are
+  durable rejected deliveries without trusting claimed capture/item IDs.
+- Every delivery gets ACCEPTED or QUARANTINED. Null, empty and non-UTF8 values
+  retain lossless evidence. Quarantine IDs include stage and processor revision.
+  Required type/range checks preserve optional null impact data, negative depths,
+  negative magnitudes and explicit deleted states with missing geometry/time.
+- Semantic IDs preserve the existing v1 common projection/numeric canonicalizer.
+  Tests compare the self-contained helper against producer contracts. Unknown
+  fields produce schema WARNs without false revisions; the FIRST raw feature
+  remains in the version table, and later raw variants remain in capture/landing
+  evidence for the retained replay horizon.
+- Add `first_batch_id` to raw versions for recoverable insertion provenance.
+  `bronze_insert_count` counts versions first attributed to that batch, including
+  when an earlier interrupted attempt already committed those versions. Add
+  `source_item_index`, `record_sha256` and `raw_feature_sha256` to deliveries;
+  record digest protects key/headers as well as the nullable message value.
+- Deduplicate MERGE sources, detect immutable key conflicts, then write versions,
+  quarantine and deliveries as separately atomic Delta statements. Re-read all
+  facts before ledger advancement/immutable manifest-bound receipt. No cross-
+  system or multi-table transaction is claimed. Current Databricks multi-table
+  transaction support has catalog-commit/compute prerequisites not assumed here.
+- Distinct verified source items in committed batches advance capture counts.
+  Complete dispatched captures become ACCOUNTED and receive a cloud receipt.
+  An incomplete PUBLISH_ACKED capture fails the notebook after preserving valid
+  work. Old CAPTURED-only sources remain explicit pending WARNs. Empty captures
+  require a completed dispatch before zero-item ACCOUNTED.
+- Receipts are `receipts/bronze/<batch_id>.json` and
+  `receipts/captures/<capture_id>.json`. Normal runs check receipts/ledger and skip
+  completed batches; `bronze_recheck=true` rechecks actual bytes/facts and repairs
+  missing receipts. Never overwrite a conflicting receipt. Preserve later
+  SILVER_COMMITTED states and original provenance during retries.
+- Job parameters: `volume_root=/Volumes/earthquake_dev/ops/landing`,
+  `bronze_fail_at=none`, `bronze_recheck=false`, `bronze_max_batches=32`.
+- Max 32 batches /16 MiB planned input, 10000 planned deliveries, 32 MiB source
+  verification cache, 256 captures, inherited 128 sealed-batch inventory.
+  Work beyond per-run planning limits is durable and visibly pending; rerun
+  with recheck=false. These are development bounds, not indefinite scheduling.
+- No deletion/VACUUM or schedule is enabled. Continuous scheduling waits for cloud
+  recovery evidence AND sustainable incremental inventory/retention/backlog
+  controls. Sprint 4 receipts establish eligibility evidence for Sprint 8 lifecycle.
+
+### Verification and remaining acceptance
+
+101 offline tests pass: the previous 59 plus 42 Sprint 4 tests. This includes
+actual notebook terminal control flow with a modeled store, seven interruption
+boundaries and repeat recovery, first-insert provenance, overlapping batches,
+republish vs source deduplication, multiple captures/ordinals, semantic revisions,
+null/binary messages, forged lineage, invalid genuine features, empty/partial
+captures, source/landing corruption, missing source/connection failures, lost
+receipt PUT reply, immutable receipt conflicts and path confinement. Pinned
+kafka-python 2.3.2 API tests are included. Syntax/docstrings pass for 25 owned
+Python files. Workflow YAML parses successfully. Spark adapter/DDL are statically
+checked; no live Databricks Spark or Aiven run was performed by the assistant.
+
+Cloud gates: import notebooks into the same folder; run setup; extend existing
+Job; process the existing 22 batches; inspect SQL uniqueness/count/disposition
+checks; prove the three published captures ACCOUNTED; repeat with recheck=true
+and unchanged fact counts; run interruption/recovery drills; measure serverless
+runtime/free quota. Old undispatched captures remain pending by design. Use the
+new Bronze recovery workflow for files-only recovery. If Kafka offsets expired,
+do not auto-reset them; controlled gap resolution remains assigned to Sprint 7.
+Silver/Gold remain unimplemented, and Sprint 4 is not marked live-validated yet.
+
+### Documentation consulted before coding
+
+https://docs.databricks.com/aws/en/delta/merge
+https://docs.databricks.com/aws/en/lakehouse/acid
+https://docs.databricks.com/aws/en/transactions/
+https://docs.databricks.com/aws/en/volumes/volume-files
+https://docs.databricks.com/aws/en/dev-tools/databricks-utils
+https://docs.databricks.com/aws/en/jobs/job-parameters
+https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php
+
+Applicable behavior and exact setup/recovery commands are recorded in the
+Sprint 4 handoff. Consult this revision before starting Sprint 5.

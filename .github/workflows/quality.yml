@@ -1,11 +1,11 @@
-# Purpose: run offline contract, retry and immutable-capture checks without credentials.
+# Purpose: run offline contract, handoff, Bronze and recovery checks without credentials.
 name: Earthquake code quality
 
 on:
   push:
-    paths: ['src/quake_pipeline/**', 'tests/**', 'scripts/check_code.py', '.github/workflows/quality.yml']
+    paths: ['src/quake_pipeline/**', 'tests/**', 'scripts/check_code.py', 'databricks/**', '.github/workflows/quality.yml']
   pull_request:
-    paths: ['src/quake_pipeline/**', 'tests/**', 'scripts/check_code.py', '.github/workflows/quality.yml']
+    paths: ['src/quake_pipeline/**', 'tests/**', 'scripts/check_code.py', 'databricks/**', '.github/workflows/quality.yml']
   workflow_dispatch:
 
 permissions:

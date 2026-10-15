@@ -1,4 +1,4 @@
-"""Trigger the Sprint 2 Databricks capture-ledger job and await a bounded result.
+"""Trigger a configured Databricks pipeline Job and await a bounded result.
 
 The launch token is stable within a GitHub attempt. Captures are already durable
 when this runs, so a job failure never requires refetching the original response.
@@ -8,6 +8,7 @@ import os
 import time
 import uuid
 from typing import Callable
+from dataclasses import replace
 
 from .cli import emit
 from .config import Settings
@@ -18,9 +19,12 @@ from .http import HTTPClient
 
 def sync_ledger(settings: Settings, job_id: int, token: str, client: HTTPClient,
                 sleeper: Callable[[float], None] = time.sleep,
-                monotonic: Callable[[], float] = time.monotonic) -> str:
+                monotonic: Callable[[], float] = time.monotonic,
+                wait_seconds: int = 600) -> str:
     """Launch once per token, then poll the existing run rather than creating duplicates."""
     settings.require_cloud()
+    if not 60 <= wait_seconds <= 2400:
+        raise ConfigurationError("Job wait must be between 60 and 2400 seconds")
     if job_id <= 0:
         raise ConfigurationError("EQ_CAPTURE_LEDGER_JOB_ID must be a positive numeric Job ID")
     headers = {"Authorization": f"Bearer {settings.token}", "Content-Type": "application/json"}
@@ -33,7 +37,7 @@ def sync_ledger(settings: Settings, job_id: int, token: str, client: HTTPClient,
         raise ContractError("Databricks launch response has no numeric run_id")
     run_id = str(launched["run_id"])
     emit({"event": "LEDGER_JOB_STARTED", "databricks_run_id": run_id})
-    deadline = monotonic() + 600
+    deadline = monotonic() + wait_seconds
     while monotonic() < deadline:
         result = client.request("databricks", "GET", settings.host +
                                 "/api/2.2/jobs/runs/get?run_id=" + run_id, headers=headers)
@@ -44,9 +48,9 @@ def sync_ledger(settings: Settings, job_id: int, token: str, client: HTTPClient,
         if state.get("result_state") == "SUCCESS":
             return run_id
         if state.get("life_cycle_state") in {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"}:
-            raise PipelineError(f"Capture ledger job failed; inspect Databricks run {run_id}")
+            raise PipelineError(f"Databricks pipeline job failed; inspect Databricks run {run_id}")
         sleeper(10)
-    raise BudgetExceeded(f"Ledger job still running; inspect Databricks run {run_id} before recovery")
+    raise BudgetExceeded(f"Databricks pipeline job still running; inspect Databricks run {run_id} before recovery")
 
 
 def main() -> int:
@@ -55,12 +59,17 @@ def main() -> int:
         raw_id = os.getenv("EQ_CAPTURE_LEDGER_JOB_ID", "").strip()
         if not raw_id.isdigit():
             raise ConfigurationError("Set repository variable EQ_CAPTURE_LEDGER_JOB_ID")
-        settings = Settings.from_env()
+        raw_wait = os.getenv("EQ_LEDGER_WAIT_SECONDS", "1800").strip() or "1800"
+        if not raw_wait.isdigit() or not 60 <= int(raw_wait) <= 2400:
+            raise ConfigurationError("EQ_LEDGER_WAIT_SECONDS must be 60..2400")
+        wait_seconds = int(raw_wait)
+        settings = replace(Settings.from_env(), run_seconds=wait_seconds + 120, max_requests=1500)
         token = stable_id("ledger-launch-v1", os.getenv("GITHUB_RUN_ID", uuid.uuid4().hex),
                           os.getenv("GITHUB_RUN_ATTEMPT", "1"))
         events = []
-        run_id = sync_ledger(settings, int(raw_id), token, HTTPClient(settings, events.append))
-        print(f"PASS Sprint 2 Databricks capture ledger: run_id={run_id}")
+        run_id = sync_ledger(settings, int(raw_id), token, HTTPClient(settings, events.append),
+                             wait_seconds=wait_seconds)
+        print(f"PASS Databricks pipeline Job: run_id={run_id}")
         return 0
     except PipelineError as error:
         emit({"event": "LEDGER_JOB_FAILED", "error_code": error.code, "message": str(error)})
