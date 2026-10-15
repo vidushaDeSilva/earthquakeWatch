@@ -1,6 +1,6 @@
 # Earthquake Impact Watchlist — project memory and implementation plan
 
-Status: baseline revision 3, 15 October 2026. Sprint 1–2 code is implemented and offline-validated; cloud deployment and acceptance remain pending. The database and pipeline specification below is the implementation contract for all ten sprints; it refines the initial decisions where explicitly noted.
+Status: baseline revision 4, 15 October 2026. Sprint 1–2 cloud capture, reconciliation ledger and frozen-capture retry evidence have been provided by the user; the final ledger step of the repeat run has not been shown. Sprint 3 code and offline failure validation are complete; its new deployment and cloud acceptance remain pending. The database and pipeline specification below is the implementation contract for all ten sprints; it refines the initial decisions where explicitly noted.
 
 ## Goal and constraints
 
@@ -530,7 +530,7 @@ State machines:
 
 ## J. Current design status
 
-This is a reviewable schema/pipeline specification. Sprint 1–2 source, setup-notebook and ledger-sync code has been implemented and offline-validated. No new cloud resources, Delta tables, jobs, schedules or retention actions have been deployed by the assistant. Run the delivered setup and acceptance steps in the user's workspace before marking these sprints live-validated. Later physical DDL and pipelines remain assigned to their sprints. Expected design-change triggers: quota measurements, incompatible Free Edition features, source schema changes, and empirical watchlist quality.
+This is a reviewable schema/pipeline specification. Sprint 1–3 code is implemented and offline-validated. The user has supplied cloud evidence for Sprint 1–2 development tables, three captures, no duplicate capture keys and a reused hourly capture. No new Sprint 3 cloud resources, Delta tables, jobs, schedules or retention actions have been deployed by the assistant. Run the delivered Sprint 3 setup and cloud acceptance steps before marking it live-validated. Later physical DDL and pipelines remain assigned to their sprints. Expected design-change triggers: quota measurements, incompatible Free Edition features, source schema changes, and empirical watchlist quality.
 
 Additional primary documentation checked for this revision:
 
@@ -565,3 +565,48 @@ Cloud acceptance still requires: run setup notebook; configure the new capture-l
 - Databricks ledger import is a separate successful Job requirement after durable source capture. On failure, correct/retry with the captured interval instead of replacing its bytes. Job idempotency prevents duplicate launch for one request token, not automatic rerun of a failed Job.
 - Start scheduling only after Sprint 3–4 handoff/recovery safety gates. Source capture is manually dispatched for acceptance now.
 - Consulted primary documentation and exact installation commands are recorded in `docs/SPRINT_01_02_HANDOFF.md` inside the delivery and repository update.
+
+### Subsequent user-provided cloud evidence (15 October 2026)
+
+- Initial GitHub capture attempts returned Databricks HTTP 401. A direct identity check and Volume directory read both returned HTTP 200 with a tested token. Subsequent source capture and Delta ledger records succeeded; the exact original credential mismatch was not conclusively established. Do not infer token validity from a masked log value or a token-list ID.
+- Databricks screenshots show `usgs-m2p5-day` with 34 expected items, `usgs-m2p5-month` with 1884, and `usgs-significant-month` with 14; all CAPTURED. These are observed capture counts, not distinct earthquake counts across feeds. The duplicate capture-key query returned no rows.
+- A repeated hourly collection ending `2026-10-15T10:00:00Z` reports `reused:true`, source_stale:false and capture ID `c8784a074042dd6e0b884db5df523fd2335160da3564d381715bdbeb3acd8da3`, matching the ledger. This validates source reuse; the repeat run's final ledger-task status was not supplied.
+- The user configured capture-ledger Job ID `655771391188244` and development root `/Volumes/earthquake_dev/ops/landing`. Keep these separate from compatibility settings.
+
+## L. Sprint 3 implementation record
+
+Delivered as `earthquake-sprint-03.zip`, with complete new/replacement files under `repo-update/`. The known Sprint 1–2 package was used as the integration baseline; the user's latest remote repository was not fetched. The only replaced existing files are `scripts/check_code.py` and `docs/PROJECT_MEMORY.md`. Existing smoke and source workflows/requirements remain separate.
+
+### Implemented boundary
+
+- New `kafka_config.py`, `kafka_client.py`, `outbox.py`, `landing.py`, `bridge.py` and pinned `requirements-kafka.txt` (kafka-python 2.3.2).
+- In-memory CA TLS/SASL SCRAM-SHA-256; explicit producer idempotence, ACK all, one in-flight request; no Kafka transactions/global exactly-once claim. All raw data stays in memory or Databricks cloud storage.
+- Dedicated development topic `earthquake_events_dev`, stable group `earthquake-dev-landing-v1`, stream generation `v1`. Support one OR two partitions because current Aiven Free documentation permits/fixes two in some configurations; this refines the original single-partition assumption. Runtime metadata/config inspection rejects unsupported topology, compaction or effective retention outside (0,72h]. Inspect prints retention.bytes too; quota availability must still be measured.
+- Frozen-capture dispatcher verifies source bytes, publishes up to 10000 items per capture in chunks of 100 and writes immutable chunk ACK receipts plus a complete dispatch manifest. Normal retry skips matching receipted chunks. A failure after broker ACK but before receipt may duplicate physical deliveries with identical source identity. A new explicit dispatch generation republishes the retained capture.
+- Invalid individual source features are still enveloped and keyed by stable source-item IDs; envelope+key limit 256 KiB. Do not drop an oversized item or claim it accounted: stop and preserve the capture.
+- Manual consumer assignment processes one partition at a time, snapshots exclusive end offsets and refuses automatic resets. Data JSONL preserves raw key/value/header bytes in base64, including null/empty/non-UTF8. A sealed batch hashes exact bytes and includes a contiguous per-partition offset range. Data readback precedes manifest-last; actual bytes/rows/IDs are rechecked before synchronous next-offset commit. Lost commit replies require exact committed-offset readback.
+- Recovery inventories all sealed batch directories independently of Kafka offsets, verifies bytes and repairs eligible pending commits; incomplete data-only folders remain ignored. All sealed batches remain LANDED candidates for Sprint 4, including already-offset-committed ones. Recovery does not fake Bronze completion.
+- `databricks/sprint_03_setup.py` creates `ops.batches` with the designed schema. New `sprint_03_sync_handoff_ledger.py` independently checks cloud data/checksums/identities and MERGEs batch/run/stage metadata, advances eligible captures to PUBLISH_ACKED and preserves later stages. ACCOUNTED stays zero until Sprint 4 accounting.
+- New manual `.github/workflows/kafka-handoff.yml` offers inspect, cycle, dispatch, land and recover; cycle resolves ONE UTC interval then captures, dispatches, lands and invokes a new serial two-task Databricks Job (existing capture-ledger notebook, then new handoff ledger). All source/handoff workflows share `earthquake-dev-ingestion`, cancel-in-progress false. No schedule/deletion is enabled.
+- Databricks handoff Job uses variable `EQ_HANDOFF_LEDGER_JOB_ID`; new topic/group/generation variables are `EQ_KAFKA_TOPIC`, `EQ_KAFKA_CONSUMER_GROUP`, `EQ_STREAM_GENERATION`. Reuse existing Aiven secrets/bootstrap variable and working Databricks host/token. Dispatch generation is a workflow input, default v1.
+
+### Limits and deferred gates
+
+- Manual assignment does not fence another repository/local consumer with the same group. The shared single-writer workflow lock and one concurrent Databricks Job are required operational constraints.
+- Generation changes after topic recreation are operator-controlled. Every possible topic recreation is NOT automatically detected. Binding holds topic/group/partition count/bootstrap hash fixed within a generation.
+- Max raw batch 4 MiB, poll 100 records, drain 10000 records/600 seconds, ten empty polls on known backlog, max 128 batch directories per stream, bridge HTTP budget 1500 requests/20 minutes. Exceeding a bound fails visibly with durable prior work preserved. These are acceptance-deployment bounds, not an unlimited production inventory. Expand incremental recovery/retention before continuous scheduling.
+- OFFSET_GAP is a visible stop when committed offsets are expired/out of bounds, the group has no checkpoint but retained start is nonzero, or records have holes. Never auto-reset earliest/latest. Frozen-capture replay is implemented with a new dispatch generation while offsets are valid; verified resolution of an already-invalid group and historical gaps remains assigned to Sprint 7 after Bronze source accounting exists.
+- Source and landing retention remains a future Sprint 8 feature. Until Bronze acknowledgements exist, keep all source/dispatch/landing evidence. No source is ACCOUNTED just because Kafka ACKed it. No long-running free-quota/SLA claim is made.
+
+### Verification and deployment acceptance
+
+59 offline tests passed in the combined baseline: existing 30 plus 29 Sprint 3 tests. Cases include after-produce/data/manifest/commit fault boundaries, receipt reuse and deliberate replay, source/receipt/landing corruption, lost and rejected commit ACKs, null/binary/header preservation, two partitions, fixed end snapshot, byte splitting/reseek, resource bounds, source identity vs delivery identity, and explicit retention/gap failures. Installed pinned client API checks verify leader_epoch, consumer method signatures and supported producer/admin configs. Syntax/docstring gate passes for 21 Python files. Databricks notebooks are syntax-checked but have not been executed on the user's Spark environment. No new Kafka integration run was performed by the assistant.
+
+To mark Sprint 3 live-validated: copy overlay; create separate Aiven dev topic; run setup; configure NEW `earthquake-dev-handoff-ledger` Job with max concurrent runs 1 and two serial notebook tasks; set variables; run inspect; cycle hourly and same-window retry; cycle reconcile; perform four dev failure drills with distinct dispatch generations, then recover/retry; verify unique capture/batch keys, exact offset/row counts, PUBLISH_ACKED and LANDED states, zero source accounting and NULL Bronze acknowledgement. Workflow failure injections are deliberate red runs. Full commands and SQL are in `docs/SPRINT_03_HANDOFF.md` and must also be given directly in chat.
+
+### Primary sources and actual client checks
+
+- Pinned producer/consumer/admin documentation: https://kafka-python.readthedocs.io/en/2.3.2/apidoc/KafkaProducer.html ; https://kafka-python.readthedocs.io/en/2.3.2/apidoc/KafkaConsumer.html ; https://kafka-python.readthedocs.io/en/2.3.2/apidoc/KafkaAdminClient.html . The installed 2.3.2 wheel was inspected: producer idempotence needs in-flight=1; `OffsetAndMetadata` has leader_epoch; beginning_offsets/end_offsets take partitions only; Admin does not accept allow_auto_create_topics; Producer does not accept buffer_memory. Do not use master-version defaults/signatures.
+- Aiven Free/service parameters and Python SASL: https://aiven.io/docs/products/kafka/free-tier/kafka-free-tier ; https://aiven.io/docs/products/kafka/reference/advanced-params-free-tier ; https://aiven.io/docs/products/kafka/howto/connect-with-python .
+- Databricks Files API and Delta MERGE: https://docs.databricks.com/api/files/v2/list-directory-contents ; https://docs.databricks.com/aws/en/delta/merge .
+- GitHub concurrency: https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency .

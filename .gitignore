@@ -1,0 +1,11 @@
+# Purpose: append these local support/secret exclusions to the existing .gitignore.
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+data/
