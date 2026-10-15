@@ -1,4 +1,4 @@
-"""Check Sprint 1–2 Python syntax and required module/class/function explanations.
+"""Check Sprint 1–3 Python syntax and required module/class/function explanations.
 
 This lightweight repository gate uses the standard library and never executes
 Databricks notebooks or contacts services. The legacy smoke test is outside scope.
@@ -12,8 +12,8 @@ def main() -> int:
     """Fail when an owned Python file has invalid syntax or missing docstrings."""
     root = Path(__file__).resolve().parents[1]
     paths = [*root.joinpath("src/quake_pipeline").rglob("*.py"),
-             *root.joinpath("tests").glob("test_sprints_01_02.py"),
-             *root.joinpath("databricks").glob("sprint*0[12]*.py"), Path(__file__)]
+             *root.joinpath("tests").glob("test_sprint*.py"),
+             *root.joinpath("databricks").glob("sprint*.py"), Path(__file__)]
     errors = []
     for path in sorted(set(paths)):
         try:

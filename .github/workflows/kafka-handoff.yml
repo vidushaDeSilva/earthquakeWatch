@@ -1,0 +1,109 @@
+# Purpose: manually exercise source capture, Kafka dispatch, durable landing and recovery.
+# All ingestion workflows share the same lock; scheduling awaits Sprint 4 accounting.
+name: Earthquake Kafka handoff (Sprint 3)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Cycle captures source then dispatches/lands; other actions reuse frozen data
+        type: choice
+        default: cycle
+        options: [cycle, dispatch, land, recover, inspect]
+      mode:
+        description: Source feed selection (ignored by land/recover/inspect)
+        type: choice
+        default: hourly
+        options: [hourly, reconcile]
+      window_end:
+        description: Fixed UTC window end; blank resolves once for the whole workflow
+        type: string
+        default: ''
+      dispatch_generation:
+        description: Keep v1 for retries; use a NEW value only for deliberate source replay
+        type: string
+        default: v1
+      fail_at:
+        description: Intentional dev failure boundary for acceptance drills
+        type: choice
+        default: none
+        options: [none, after-produce, after-data, after-manifest, after-commit]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: earthquake-dev-ingestion
+  cancel-in-progress: false
+
+jobs:
+  handoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      PYTHONPATH: src
+      PYTHONDONTWRITEBYTECODE: '1'
+      EQ_ENV: dev
+      EQ_VOLUME_ROOT: ${{ vars.EQ_VOLUME_ROOT }}
+      EQ_COLLECTION_GENERATION: ${{ vars.EQ_COLLECTION_GENERATION }}
+      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      AIVEN_BOOTSTRAP_SERVERS: ${{ vars.AIVEN_BOOTSTRAP_SERVERS }}
+      AIVEN_KAFKA_USERNAME: ${{ secrets.AIVEN_KAFKA_USERNAME }}
+      AIVEN_KAFKA_PASSWORD: ${{ secrets.AIVEN_KAFKA_PASSWORD }}
+      AIVEN_KAFKA_CA_PEM: ${{ secrets.AIVEN_KAFKA_CA_PEM }}
+      EQ_KAFKA_TOPIC: ${{ vars.EQ_KAFKA_TOPIC }}
+      EQ_KAFKA_CONSUMER_GROUP: ${{ vars.EQ_KAFKA_CONSUMER_GROUP }}
+      EQ_STREAM_GENERATION: ${{ vars.EQ_STREAM_GENERATION }}
+      EQ_DISPATCH_GENERATION: ${{ inputs.dispatch_generation }}
+      HANDOFF_ACTION: ${{ inputs.action }}
+      HANDOFF_MODE: ${{ inputs.mode }}
+      REQUESTED_WINDOW_END: ${{ inputs.window_end }}
+      FAIL_AT: ${{ inputs.fail_at }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned Kafka client
+        run: python -m pip install -r requirements-kafka.txt
+      - name: Verify contracts, fault recovery and pinned client APIs
+        run: |
+          python -m unittest discover -s tests -v
+          python scripts/check_code.py
+      - name: Resolve one UTC collection window
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime, timezone
+          from quake_pipeline.contracts import collection_window, utc_text
+          _, end = collection_window(os.environ['HANDOFF_MODE'], os.environ.get('REQUESTED_WINDOW_END'), datetime.now(timezone.utc))
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('BRIDGE_WINDOW_END=' + utc_text(end) + '\n')
+          print('Resolved collection window_end=' + utc_text(end))
+          PY
+      - name: Freeze source capture
+        if: inputs.action == 'cycle'
+        run: python -m quake_pipeline.cli --action capture --mode "$HANDOFF_MODE" --window-end "$BRIDGE_WINDOW_END"
+      - name: Dispatch frozen captures
+        if: inputs.action == 'cycle' || inputs.action == 'dispatch'
+        run: |
+          point=none
+          if [ "$FAIL_AT" = after-produce ]; then point=after-produce; fi
+          python -m quake_pipeline.bridge --action dispatch --mode "$HANDOFF_MODE" --window-end "$BRIDGE_WINDOW_END" --fail-at "$point"
+      - name: Verify cloud landing before Kafka commits
+        if: inputs.action == 'cycle' || inputs.action == 'land'
+        run: |
+          point="$FAIL_AT"
+          if [ "$point" = after-produce ]; then point=none; fi
+          python -m quake_pipeline.bridge --action land --fail-at "$point"
+      - name: Recover sealed manifests or inspect stream metadata
+        if: inputs.action == 'recover' || inputs.action == 'inspect'
+        run: python -m quake_pipeline.bridge --action "$HANDOFF_ACTION" --fail-at "$FAIL_AT"
+      - name: Sync source and handoff ledgers in Databricks
+        if: inputs.action != 'inspect'
+        env:
+          EQ_CAPTURE_LEDGER_JOB_ID: ${{ vars.EQ_HANDOFF_LEDGER_JOB_ID }}
+        run: |
+          python -m quake_pipeline.jobs
+          echo 'PASS Sprint 3 Databricks handoff ledger job'
