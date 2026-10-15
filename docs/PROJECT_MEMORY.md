@@ -1,6 +1,6 @@
 # Earthquake Impact Watchlist — project memory and implementation plan
 
-Status: baseline revision 5, 15 October 2026. Sprint 1–2 cloud capture and frozen retry are evidenced. User screenshots now evidence Sprint 3 publication acknowledgements for three captures and 22 landed batches; full Sprint 3 fault-drill acceptance is not evidenced. Sprint 4 implementation and 101 offline tests are complete; Databricks deployment and cloud acceptance remain pending. The specification below remains the implementation contract, with explicit refinements recorded per sprint.
+Status: implementation revision 7, 15 October 2026. Sprint 1–2 cloud capture and frozen retry are evidenced; Sprint 3 publication/landing and Sprint 4 main Bronze/accounting paths have user-provided cloud evidence. Full earlier fault/recheck gates remain unconfirmed. Sprint 5 and Sprint 6 implementation and offline validation are delivered; their Databricks deployment and cloud acceptance remain pending. Section O records the implementation refinements and evidence. The historical CAPTURED backlog is recorded and explicitly deferred, not repaired or ignored.
 
 ## Goal and constraints
 
@@ -731,3 +731,337 @@ https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php
 
 Applicable behavior and exact setup/recovery commands are recorded in the
 Sprint 4 handoff. Consult this revision before starting Sprint 5.
+
+
+## N. Sprint 5 and 6 design lock (15 October 2026; design only)
+
+The user requested details without code. No Sprint 5/6 DDL, notebook, workflow,
+job or public view was created. This section refines the initial contract above
+and is the starting point for implementation. It does not mark either sprint
+implemented or live validated.
+
+### Deferred recovery issue (user instruction, 15 October 2026)
+
+The three historical 34-item CAPTURED day responses are pending processing, not
+proof of 102 missing distinct earthquakes. The likely cause is source-only
+Sprint 2 captures predating Kafka handoff; exact per-capture cause remains
+unconfirmed without original receipts/logs. Current dispatch selects the frozen
+capture for a requested collection window; it does not drain every pending
+capture_id automatically. Preserve all original responses, manifests and ledger
+rows. Do not manually mark them ACCOUNTED, delete them, or infer completion from
+overlap with newer feeds. The user explicitly deferred fixing this issue while
+proceeding with Sprints 5 and 6.
+
+Sprint 7 recovery must inventory verified sealed captures independently of the
+current window, dispatch by capture_id with original source-item identities,
+reuse valid receipts, recover landed work, reconcile every item's disposition,
+and resume bounded pending work on later runs. Expired Kafka offsets need a
+recorded recovery generation/gap plan, never an automatic reset. Complete this
+and sustainable inventory/retention gates before claiming unattended operation.
+Silver can process already committed Bronze. Gold preview may be built, but
+normal public promotion must disclose/block unresolved coverage as specified;
+the deferred issue cannot be silently ignored to make acceptance pass.
+
+### Verified starting boundary
+
+User-provided Databricks screenshots show 22 Bronze-committed batches, 1,931
+accepted deliveries, 1,886 semantic raw versions and zero quarantined deliveries.
+The published captures (1,884 month, 14 significant-month, 33 day) are ACCOUNTED;
+three older 34-item day captures remain CAPTURED with zero accounted. The six
+source-item-accounting WARN rows represent those three captures observed by two
+runs. These are distinct source observations. Screenshots do not establish all
+key-uniqueness queries, repeat-run idempotency or fault recovery. A Gold
+publication must expose source freshness/gaps truthfully; unresolved old
+CAPTURED responses are not silently treated as completed work.
+
+### Sprint 5: source revisions -> Silver
+
+- Input: accepted `bronze.deliveries` from BRONZE_COMMITTED batches, joining
+  `bronze.event_versions` on source_version_id. Quarantine never becomes a
+  current earthquake. Maintain three originally planned tables:
+  `silver.event_aliases` keyed by `(source_system, alias_event_id)`,
+  `silver.event_versions` keyed by deterministic silver_version_id, and
+  `silver.events_current` keyed by stable event_key. No extra business tables.
+- Crucial lineage refinement: the v1 semantic projection intentionally excludes
+  `properties.ids` and preferred-ID metadata, while `bronze.event_versions`
+  retains only the first raw JSON for a semantic version. Therefore an alias
+  change on a later accepted delivery may have the SAME source_version_id.
+  Ingest alias evidence from EVERY newly processed accepted delivery by
+  reopening its checksum-verified frozen capture with `capture_id` and
+  `source_item_index`; require the feature digest in Bronze to match.
+  Persist the resulting mapping/first-last confirmation in event_aliases before
+  source/landing retention can remove that observational evidence.
+- Parse the USGS preferred `id` and explicitly supplied `properties.ids`
+  tokens (trim separators, reject blank/ambiguous tokens). Never join by place,
+  proximity, magnitude or similar event time. A new unambiguous ID gets a
+  deterministic stable event_key based on its first observed source ID. An
+  incoming alias set with one existing key maps new IDs to it. If it names
+  multiple existing keys, block the identity update, record an ops check,
+  quarantine/conflict the affected source observation, and require an explicit
+  resolution. Do not rewrite old event keys or silently merge distinct events.
+- Normalize source epoch milliseconds to UTC timestamps and event_date. Use
+  GeoJSON longitude/latitude/depth km without clipping negative depth;
+  magnitude, MMI, CDI, PAGER, felt/sig/tsunami remain nullable/typed.
+  Preserve source_updated_at (source revision), event_time (origin),
+  first_observed_at (minimum verified capture fetch), and last_confirmed_at
+  (maximum verified capture fetch); a replayed old capture does not make
+  data fresher. Filter non-earthquake feature types only at Gold eligibility.
+- Stable history key hashes event_key, source_version_id and integer
+  normalizer_revision. One valid older/out-of-order source state is inserted
+  into history but cannot replace a newer current state. Deduplicate MERGE
+  inputs to one candidate per target event_key before updating current.
+- Same source timestamp with different semantic payloads produces a conflict,
+  independent of arrival order. Keep both in history, leave the last safe
+  accepted current state, set unresolved-conflict quality and require an
+  authoritative event-ID refetch/resolution; do not choose a hash tie-break.
+  A normalizer revision change is a deliberate migration with pinned version.
+- An explicit authoritative deletion/withdrawal with source updated time is
+  a typed tombstone (history retained; current is_deleted=true). Feed absence,
+  magnitude demotion, or 404 by itself does not delete an event. A deletion
+  missing authoritative revision time is unresolved; never fabricate time
+  from processing time. Daily targeted event checks in Sprint 7 cover feed
+  demotions/missing events.
+- Serial Job ordering becomes capture ledger -> handoff ledger -> Bronze ->
+  Silver, same max concurrent Job runs=1. Verify alias uniqueness, history
+  lineage, no current timestamp regressions, no ambiguous current identity,
+  accepted vs conflicted counts, then advance each eligible ops.batches from
+  BRONZE_COMMITTED to SILVER_COMMITTED and write/readback a deterministic
+  Silver completion receipt. Since writes to tables commit separately, failed
+  attempts retain input for idempotent repair; no partial batch is certified.
+- Acceptance scenarios: exact duplicate feeds and Kafka replay; later alias
+  change without semantic version change; alias collision; older arrival after
+  newer; same-time differing payload; genuine update; origin-time correction;
+  explicit deletion; missing optional values; interruption after each table
+  write, ledger advance and receipt; repeat run without new rows/current drift.
+
+### Sprint 6: pinned Gold snapshots -> single publication pointer
+
+- Input: a concrete, retained Delta version of `silver.events_current`, a
+  fixed UTC `as_of_utc`, immutable `ref.impact_policies.policy_version`, and
+  recorded completed Silver batch set. The deterministic publication_id
+  includes processing generation, Silver table version, policy version and
+  as-of time. A retry with that ID must use exactly those original inputs;
+  if its Silver version has expired, fail visibly and create a fresh candidate
+  only through an explicit new attempt. Do not use independent latest-table
+  reads for the same release.
+- `ops.publications` holds BUILDING then READY plus pinned lineage, output row
+  counts and output table versions. `gold.watchlist_snapshots` stores one event
+  per `(publication_id,event_key)`; `gold.window_snapshots` stores global
+  hourly/daily `(publication_id,grain,window_start)` including zero-count
+  windows; `gold.daily_history` stores a revision per `(event_date,publication_id)`.
+  All snapshot tables use the same Silver pin, policy and as-of.
+- Eligibility: current nondeleted type=earthquake and event_time in
+  `[as_of_utc - 30 days, as_of_utc)`. Matching reasons are SIG_GT_600,
+  PAGER_YELLOW/ORANGE/RED, MAG_GTE_6, SHAKEMAP_MMI_GTE_6,
+  TSUNAMI_FLAG. Missing values do not match. PAGER reason gets label
+  ESTIMATED_IMPACT; other triggers get POTENTIAL_IMPACT. This is a
+  potential-impact watchlist, not confirmed damage or an emergency warning.
+  `mmi` is the summary ShakeMap maximum MMI when present; do not substitute
+  community `cdi`. `sig > 600` is strict; magnitude and MMI use >= 6.
+  An affected unresolved identity/current conflict blocks pointer promotion
+  pending review, even if earlier current state would otherwise qualify.
+- Sort PAGER red/orange/yellow first; then other matching reasons and
+  significance/magnitude descending, event_key as stable tie-break. Priority
+  is an editorial watchlist sort, not a calibrated risk score. Expose source
+  URL, source update and publication/check timestamps, inclusion reasons,
+  policy version, coverage status and distinct estimated/potential labels.
+- Window counts come from all in-scope current, nondeleted earthquakes in
+  the pinned Silver snapshot; `watchlist_count` uses that same release's
+  eligibility. Define half-open UTC [start,end) hours/days, include zeros,
+  flag partial boundary buckets, and handle origin-time corrections to both
+  old and new buckets. These counts reflect the M2.5+ plus significant-feed
+  sampling scope, not all worldwide earthquakes. No geocoding from `place`.
+- Daily history keeps corrected-to-zero days and labels policy/coverage.
+  Snapshot history persists independently of short Delta time travel and
+  one-year Silver retention; Sprint 8 applies row retention while protecting
+  active and designated daily releases.
+- Publication order: persist BUILDING; generate deterministic rows (including
+  valid empty watchlists); MERGE each output idempotently; verify output
+  uniqueness, row/count parity, rule semantics, source freshness/coverage,
+  lineage, source-check status and lack of blocking conflicts; set READY; then
+  conditionally advance the single `ops.serving_pointer` row with a generation
+  check. A crash before the pointer leaves the previous release active.
+  On uncertain pointer reply, readback decides if it is already active.
+  An older retry cannot supersede a newer pointer. Record activation/from/to
+  and generation in ops.stage_attempts (repair a missing audit row before a
+  subsequent activation). Reader resolves the pointer once per dashboard
+  refresh and queries both snapshot tables using the same publication_id.
+- Older captured but unaccounted source responses remain visible as coverage
+  gaps. Publication requires explicit freshness/coverage gates per required
+  source and no unresolved capture blocking the release interval; if blocked,
+  leave the prior pointer in place with a stale/partial banner and an ops
+  check. The three historical CAPTURED day responses require recovery or
+  an explicit documented gap disposition before any partial release. Full
+  coverage cannot be claimed until those responses are accounted for or
+  conclusively shown redundant against newer verified captures.
+- Failure drills: stop after each Gold output, READY marking and pointer
+  attempt; repeat with same publication ID; lost pointer acknowledgement;
+  concurrent/older run attempt; valid zero candidate release; origin-time
+  correction; policy revision; source outage and blocking identity conflict.
+  Verify one consistent release across public views. A READY release need
+  not be active if superseded.
+
+### Design limits and handoff
+
+Keep per-table Delta atomic writes and reconciliation as in Sprint 4; do not
+presume multi-table catalog commits are enabled on existing managed tables.
+The publication pointer is the visibility boundary for Gold. Free Edition
+compute and storage limits must be measured in the user's workspace; avoid
+starting an always-on process, automated deletion or production schedule
+while unresolved recovery/retention bounds exist. Sprint 7 owns targeted
+source reconciliation and historical gap repair; Sprint 8 owns lifecycle and
+rollback drills. Sprint 5/6 plans do not alter the existing 10-sprint map.
+
+Primary sources checked before this design lock:
+- USGS GeoJSON summary and ComCat event query:
+  https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php
+  https://earthquake.usgs.gov/fdsnws/event/1/
+- Databricks MERGE, ACID, transactions and Delta history:
+  https://docs.databricks.com/aws/en/delta/merge
+  https://docs.databricks.com/aws/en/lakehouse/acid
+  https://docs.databricks.com/aws/en/transactions/
+  https://docs.databricks.com/aws/en/delta/tutorial
+
+## O. Sprints 5–6 implementation handoff (15 October 2026)
+
+The user instructed the assistant to note the historical capture backlog for
+later recovery and proceed with finalizing Sprints 5 and 6. Delivered as
+earthquake-sprints-05-06.zip with nine NEW and two complete REPLACE files under
+repo-update/. Integration uses the known Sprint 1–4 delivery; the user's latest
+remote repository was not fetched. No live Databricks/Aiven operations were
+performed by the assistant. Do not mark these sprints live-validated yet.
+
+### Delivered files
+
+- NEW databricks/sprint_05_silver_library.py: pure identity/normalization engine,
+  bounded Spark adapter and persisted run lifecycle.
+- NEW databricks/sprint_06_gold_library.py: policy validation, coverage pinning,
+  deterministic snapshots, publication gates and conditional pointer/audit.
+- NEW databricks/sprint_05_06_setup.py: three Silver tables, three Gold tables,
+  ops.publications, ops.serving_pointer, and four public/health views.
+- NEW databricks/sprint_05_process_silver.py and sprint_06_publish_gold.py: fourth
+  and fifth serial tasks in the SAME earthquake-dev-handoff-ledger Job.
+- NEW databricks/sprint_05_06_acceptance.sql, tests/test_sprint_05_06.py,
+  docs/SPRINT_05_06_HANDOFF.md and .github/workflows/silver-gold-recovery.yml.
+- REPLACE docs/PROJECT_MEMORY.md and .github/workflows/quality.yml. Quality now
+  installs the unchanged pinned Kafka client for offline API signature tests.
+
+All code files include purpose descriptions, docstrings and essential comments.
+No runner ingestion file, dependency pin, secret or source workflow is replaced.
+New recovery workflow reuses existing credentials/Job ID and the same shared
+ingestion concurrency lock. No schedule, deletion, VACUUM or external service.
+
+### Silver implementation refinements
+
+- Reopen sealed landing evidence and independently verified frozen captures.
+  Compare persisted Bronze deliveries, semantic versions and durable rejections;
+  require the manifest-bound Bronze completion receipt. Batch verification is
+  vectorized rather than making a Spark version-lookup action per earthquake.
+- Observe aliases from every accepted delivery, including raw variants sharing
+  a source_version_id. Resolve explicit alias components before writing; a
+  component naming multiple existing event keys is a blocking identity conflict.
+  No fuzzy matching or automatic merge of established keys.
+- Add semantic_payload_sha256 to normalized history/current, using the same
+  Bronze semantic projection but independent of the preferred ID. Two linked
+  source IDs with identical payload/time are equivalent, not a false conflict.
+  A deterministic source-ID tie-break applies only to equivalent payloads.
+- Keep optional nulls, negative valid depths, UTC source/event times and source
+  links. Observation minima/maxima come from durable source fetch time; retries
+  cannot create freshness. An authoritative newer status=deleted is a tombstone;
+  absence/404 do not delete. Targeted event-ID checks remain Sprint 7.
+- Historical normalized facts remain immutable. Derived selection_status can
+  become CONFLICT after new same-time contradictory evidence. Hold the previous
+  current state, flag it unresolved, record a stage-scoped quarantine, and leave
+  affected input uncertified. No hash winner, automatic conflict resolution or
+  normalizer migration is implemented. Gold refuses unresolved current facts.
+- Prove aliases/history/current after independently atomic writes. Advance the
+  batch to SILVER_COMMITTED only after successful checks; then write immutable
+  receipts/silver/<batch_id>.json containing input identity, manifest hash,
+  normalizer revision and accepted delivery-set digest. Missing receipts are
+  rediscovered despite an advanced ledger. Recheck rereads original bytes.
+- Keep the 128-batch development inventory; select up to32 batches/16MiB landing
+  input/10000 accepted observations, inherited32MiB source cache/256 captures,
+  and20000-row alias/affected-history bounds. Exceeding a bound fails visibly;
+  lower silver_max_batches where appropriate. This is not sustained scheduling.
+
+### Gold implementation refinements
+
+- Support the exact immutable Sprint 1 policy seed: rules_json is {any:[...]},
+  rather than the full config-file wrapper. Supported threshold revisions are
+  validated explicitly. Pin a canonical policy hash; same-version mutation
+  fails a retry. PAGER labels, nullable field handling and reason semantics
+  match section N; CDI never substitutes for ShakeMap MMI.
+- Pin a concrete retained Silver version, policy/hash, fixed as-of, input batch
+  set, frozen source-check summary and initial pointer generation. Publication
+  identity includes these pins and coverage issues. Persist source_checks_json,
+  coverage_status, blocking_issues, policy_sha256, processing_generation,
+  expected_pointer_generation and output_hashes in ops.publications in addition
+  to the earlier design fields. These are explicit schema refinements.
+- Snapshot reads use versionAsOf with no latest fallback. An explicitly chosen
+  as-of cannot precede included observations (five-second clock tolerance).
+  Gold current/output bounds are10000 rows; no silent truncation.
+- Build same-pin watchlist and zero-filled UTC hour/day snapshots for the30-day
+  horizon. Rebuild both buckets on origin-time correction, retaining historical
+  publications and corrected-to-zero daily rows. No old archive is erased just
+  because it falls outside the current source window. Older corrections remain
+  bounded catalog/backfill work in Sprint 7.
+- Default gold_action=preview persists BUILDING output and reports coverage
+  issues without changing the pointer or claiming public acceptance. This lets
+  the user inspect Sprints5/6 while deliberately deferring the old captures.
+- Publish requires no pending captures/batches, no open Bronze rejections or
+  Silver conflicts, and accounted checks for all3 feeds. Accounting a rejected
+  source item proves durable disposition, not complete product eligibility.
+  Initial source thresholds: both fetch/generation age<=3h day feed;<=36h
+  monthly feeds; generated more than5min after fetch is unverified. Activation
+  age<=3h and no newer Silver version. Recheck live source conditions before
+  promotion; a previously active ID is an idempotent no-op, not new freshness.
+- Scope remains FEED_SNAPSHOTS_ONLY, not global-catalog completeness. Explicitly
+  disclose missing targeted event-ID reconciliation (Sprint7). Pending old
+  CAPTURED responses remain blocking by default. No bypass was added.
+- Compare full output counts/digests, including unexpected rows and valid empty
+  output; set READY; conditionally MERGE the seeded single serving pointer.
+  Lost pointer replies use exact readback. A changed generation or older/equal
+  as-of cannot overwrite newer serving. Activation audit uses ops.stage_attempts
+  with a deterministic pointer-generation ID; repair the previous audit before
+  another activation. No assumed multi-table transaction/catalog upgrade.
+- Public views show source freshness and live pending work while retaining the
+  last good release. Daily archive views expose activated READY revisions, so
+  abandoned READY candidates do not leak into historical serving. Dashboard
+  refreshes must still resolve the pointer once for consistent multi-query reads.
+
+### Verification evidence and deployment gate
+
+141 offline tests passed (101 previous plus40 new). New tests exercise the
+actual Silver/Gold engines and notebook terminal control flow with synthetic
+in-memory stores, real producer-compatible frozen evidence, six Silver and six
+Gold interruption boundaries, replay, alias-only changes, equivalent preferred
+IDs, collisions, late history, same-time conflicts, explicit deletion, corruption,
+pin expiry, policy changes, empty releases, half-open windows, origin-time
+correction, pending/rejected source coverage and pointer recovery/generation.
+Pinned kafka-python2.3.2 signature checks ran, not skipped. Syntax/explanatory
+docstrings passed for31 Python files; workflow YAML parsed.
+
+Local PySpark3.5.3 accepted all8 new table schemas and generated rows. Four
+public view queries and20 acceptance queries were analyzed/executed against
+synthetic temporary views with namespace names translated;13 setup statements
+were parsed in Databricks SQL dialect. This does NOT exercise managed Delta
+MERGEs, actual Volume I/O, Unity Catalog or Databricks Serverless/cloud quotas.
+No new pipeline runtime dependency on PySpark/sqlglot is added.
+
+Cloud gate: import the5 new Python source notebooks into the same workspace
+folder as sprint_04_bronze_library, preserving separate %run cells; run setup;
+add Silver then Gold after existing3 tasks in the SAME Job, max concurrent1;
+keep gold_action=preview initially; run and inspect shipped SQL; recheck Silver
+with unchanged business facts and preserved observation times; recover selected
+development failures using the same Job and pinned Gold publication ID. Do not
+claim publish/READY/pointer acceptance while old captures or stale feeds block
+it. Gold after-ready/after-pointer cloud drills await resolved source gates.
+Measure runtime and quotas before unattended operation. All instructions and
+exact defaults are in docs/SPRINT_05_06_HANDOFF.md and supplied directly in chat.
+
+Primary documentation checked before coding: Databricks Delta MERGE, table
+history/time travel, transactions, and notebook-workflows (%run must occupy its
+own cell); USGS GeoJSON summary fields. Links and specific behavior appear in
+the handoff. The initial ten-sprint roadmap and retention policy remain; no
+deferred capture dispatcher, normalizer migration, retention executor, rollback
+automation, historical catalog backfill or public dashboard is implemented here.
