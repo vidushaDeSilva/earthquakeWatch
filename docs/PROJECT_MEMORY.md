@@ -1,6 +1,6 @@
 # Earthquake Impact Watchlist — project memory and implementation plan
 
-Status: implementation revision 10, 16 October 2026. Sprints1–6 cloud evidence remains as recorded below. Live Sprint7 runs exposed a40-minute GitHub wait expiry while Databricks continued. A later query showed ten pending captures and unverified tracked IDs during ongoing work. The user rejected manual recovery as routine operation and explicitly requested project-data reset code and fully automated continuation. Sections R–S, README.md and docs/AUTOMATION_V2.md now govern operation: one deployment, automatic scoped initial reset/Job setup, durable scheduled controller, consolidated task and automatic backlog/retry/publication/retention. Implementation is offline-verified; no cloud deletion, deployment or unattended acceptance of this revision has been performed.
+Status: implementation revision 11, 16 October 2026. Sprints1–6 cloud evidence remains as recorded below. Live Sprint7 runs exposed a40-minute GitHub wait expiry while Databricks continued. A later query showed ten pending captures and unverified tracked IDs during ongoing work. The user rejected manual recovery as routine operation and explicitly requested project-data reset code and fully automated continuation. Sections R–T, README.md and docs/AUTOMATION_V2.md now govern operation: one deployment, automatic scoped initial reset/Job setup, durable scheduled controller, consolidated task and automatic backlog/retry/publication/retention. Implementation is offline-verified; no cloud deletion, deployment or unattended acceptance of this revision has been performed.
 
 ## Goal and constraints
 
@@ -1344,3 +1344,28 @@ refusal, stale hint fallback and discovery after a lost creation acknowledgement
 Actual APIs, reset/ACLs, Serverless runtime and sustained free-tier usage remain
 cloud acceptance gates. Primary Jobs list, managed compute and GitHub scheduling
 documentation were checked before finalization; links are in AUTOMATION_V2.md.
+
+## T. Existing Databricks Job compatibility diagnostic (16 October 2026)
+
+The first revision10 GitHub execution stopped with only ConfigurationError because
+the top-level controller deliberately suppressed all exception text. This was
+insufficient to distinguish missing settings, a legacy Job hint, duplicate Job
+names or an older classic task layout. No reset or processing success is inferred
+from that failed run.
+
+Revision11 treats EQ_HANDOFF_LEDGER_JOB_ID and EQ_CAPTURE_LEDGER_JOB_ID strictly
+as optional hints. Blank, malformed, deleted or unrelated hints fall back to
+exact-name discovery and can never become a mutation target. Duplicate exact-name
+project Jobs still stop safely. A known earthquake-dev-handoff-ledger using an
+earlier classic or multi-task layout is now reset to the single Serverless notebook
+task; its old cluster reference is not retained. Only ConfigurationError messages
+authored by repository code are emitted in AUTOMATION_ERROR. Provider bodies,
+payloads and credentials remain suppressed. This makes any remaining preflight
+failure directly actionable from the GitHub log.
+
+Verification:233 offline tests pass with no skips. Added coverage proves malformed
+and unrelated optional hints fall back to the exact project name and an existing
+classic handoff task is rewritten without existing_cluster_id/new_cluster. Syntax
+and explanatory-docstring checks pass for45 Python files. Cloud rerun remains the
+acceptance gate; the original generic error alone cannot identify which strict
+check caused the live failure.

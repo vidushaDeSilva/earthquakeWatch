@@ -111,9 +111,11 @@ Keep these existing repository variables:
 - AIVEN_BOOTSTRAP_SERVERS
 
 EQ_HANDOFF_LEDGER_JOB_ID and EQ_CAPTURE_LEDGER_JOB_ID are optional compatibility
-hints, not required configuration. If present, they must identify the known
-earthquake project Jobs; a deleted Job ID falls back to discovery. No one copies
-Job IDs as part of setup. Old generation/group variables are no longer required.
+hints, not required configuration. Blank, malformed, deleted or unrelated hints
+fall back to exact-name discovery and cannot become mutation targets. Earlier
+classic/multi-task versions of the exact handoff Job are migrated to the single
+Serverless task automatically. No one copies Job IDs as part of setup. Old
+generation/group variables are no longer required.
 
 The workflow fixes the dev Volume/topic explicitly. After reset, generation and
 consumer group come from the journal, so no one manually updates these values.
@@ -268,6 +270,6 @@ data engines. Real Aiven deletion/ACLs, workspace import, Serverless consolidate
 execution, managed reset, automatic cleanup and free-tier usage still require
 the first cloud run. No production/cloud validation is claimed from mocks.
 
-Delivery verification:231 offline tests pass with no skips;45 Python files pass
+Delivery verification:233 offline tests pass with no skips;45 Python files pass
 syntax/purpose/docstrings; eight workflow YAML files parse; both assembled
 notebooks compile and contain no nested %run execution.

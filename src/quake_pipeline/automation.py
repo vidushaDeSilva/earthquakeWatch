@@ -435,7 +435,12 @@ def main(argv=None):
                 output.write("Earthquake controller: " + json_bytes(summary).decode() + "\n")
         return 1 if state["status"].startswith("HALTED") or state["status"] == "OVERDUE_JOB" else 0
     except Exception as error:
-        print(json_bytes({"event": "AUTOMATION_ERROR", "error_class": type(error).__name__}).decode(), flush=True)
+        failure = {"event": "AUTOMATION_ERROR", "error_class": type(error).__name__}
+        # Configuration errors are authored by this repository and contain no
+        # provider body, payload or credential, so their remedy is safe to show.
+        if isinstance(error, ConfigurationError):
+            failure["message"] = str(error)
+        print(json_bytes(failure).decode(), flush=True)
         return 1
 
 

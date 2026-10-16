@@ -398,11 +398,27 @@ class DiscoveryTests(unittest.TestCase):
         with self.assertRaises(ConfigurationError):
             api.project_job_ids()
 
-    def test_wrong_explicit_id_is_not_adopted(self):
-        """An unrelated named Job cannot be reset even when an ID hint is supplied."""
-        api = self.api(lambda *args, **kwargs: {"settings": {"name": "another-project"}})
-        with self.assertRaises(ConfigurationError):
-            api.project_job_ids("22")
+    def test_wrong_explicit_id_falls_back_to_exact_name(self):
+        """An unrelated optional hint is ignored and cannot become the reset target."""
+        def request(method, path, body=None, **kwargs):
+            """Return an unrelated hinted Job and one exact discovered project Job."""
+            if "jobs/get" in path:
+                return {"settings": {"name": "another-project"}}
+            if "capture" in path:
+                return {"jobs": []}
+            return {"jobs": [{"job_id": 33,
+                "settings": {"name": "earthquake-dev-handoff-ledger"}}]}
+        self.assertEqual(self.api(request).project_job_ids("22"), (33, [33]))
+
+    def test_malformed_optional_ids_do_not_block_discovery(self):
+        """Legacy variable text is merely a hint and cannot disable exact-name discovery."""
+        def request(method, path, body=None, **kwargs):
+            """Return only the authoritative exact-name result."""
+            if "capture" in path:
+                return {"jobs": []}
+            return {"jobs": [{"job_id": 34,
+                "settings": {"name": "earthquake-dev-handoff-ledger"}}]}
+        self.assertEqual(self.api(request).project_job_ids("old-job", "old-capture"), (34, [34]))
 
     def test_missing_optional_hint_falls_back_to_discovery(self):
         """A deleted older Job ID does not require a repository-variable repair."""
@@ -428,6 +444,22 @@ class DiscoveryTests(unittest.TestCase):
             api.project_job_ids()
         self.assertEqual(api.project_job_ids(), (12, [12]))
         self.assertEqual(len(created), 1)
+
+    def test_classic_existing_project_job_is_migrated_to_serverless(self):
+        """An older project task layout is replaced without preserving its cluster."""
+        writes = []
+        def request(method, path, body=None, **kwargs):
+            """Return an allowlisted classic Job and retain its replacement body."""
+            if method == "GET":
+                return {"settings": {"name": "earthquake-dev-handoff-ledger",
+                    "tasks": [{"task_key": "old", "existing_cluster_id": "legacy"}]}}
+            writes.append(body)
+            return {}
+        self.api(request).configure(45)
+        task = writes[0]["new_settings"]["tasks"][0]
+        self.assertEqual(task["task_key"], "automated_pipeline")
+        self.assertNotIn("existing_cluster_id", task)
+        self.assertNotIn("new_cluster", task)
 
 
 class KafkaResetTests(unittest.TestCase):

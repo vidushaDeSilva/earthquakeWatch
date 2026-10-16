@@ -93,13 +93,10 @@ class CloudAPI:
         """Adopt the existing project Job, or create its one Serverless task once."""
         name = "earthquake-dev-handoff-ledger"
         job_id = None
-        if requested:
-            if not requested.isdigit():
-                raise ConfigurationError("Optional EQ_HANDOFF_LEDGER_JOB_ID must be numeric")
+        requested = requested.strip()
+        if requested.isdigit():
             old = self.request("GET", "/api/2.2/jobs/get?job_id=" + requested, expected=(200, 404))
-            if old is not None:
-                if old.get("settings", {}).get("name") != name:
-                    raise ConfigurationError("Configured handoff Job is not the earthquake project Job")
+            if old is not None and old.get("settings", {}).get("name") == name:
                 job_id = int(requested)
         if job_id is None:
             found = self.named_jobs(name)
@@ -117,13 +114,10 @@ class CloudAPI:
                 job_id = int(created["job_id"])
         ids = [job_id]
         capture_found = False
-        if capture_requested:
-            if not capture_requested.isdigit():
-                raise ConfigurationError("Optional EQ_CAPTURE_LEDGER_JOB_ID must be numeric")
+        capture_requested = capture_requested.strip()
+        if capture_requested.isdigit():
             old = self.request("GET", "/api/2.2/jobs/get?job_id=" + capture_requested, expected=(200, 404))
-            if old is not None:
-                if old.get("settings", {}).get("name") != "earthquake-dev-capture-ledger":
-                    raise ConfigurationError("Configured capture Job is not the known project capture Job")
+            if old is not None and old.get("settings", {}).get("name") == "earthquake-dev-capture-ledger":
                 ids.append(int(capture_requested))
                 capture_found = True
         if not capture_found:
@@ -183,8 +177,9 @@ class CloudAPI:
         if existing.get("name") != "earthquake-dev-handoff-ledger":
             raise ConfigurationError("EQ_HANDOFF_LEDGER_JOB_ID must name earthquake-dev-handoff-ledger")
         tasks = existing.get("tasks", [])
-        if any(t.get("new_cluster") or t.get("existing_cluster_id") for t in tasks):
-            raise ConfigurationError("Use the existing free Serverless Job; paid/classic compute is refused")
+        # Earlier sprints may have used a classic/multi-task layout. Resetting
+        # this exact allowlisted Job removes that compute reference and migrates
+        # it to the single managed Serverless task below.
         task = {"task_key": "automated_setup" if setup else "automated_pipeline",
             "notebook_task": {"notebook_path": WORKSPACE + ("/automated_setup" if setup else "/automated_pipeline"),
                               "source": "WORKSPACE"},
