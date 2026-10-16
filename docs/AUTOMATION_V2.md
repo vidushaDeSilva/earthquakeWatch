@@ -11,7 +11,7 @@ server, external monitoring service, new paid compute, or Aiven API token is use
 The old design waited for Spark in GitHub and failed when its40-minute wait or
 32-batch pass ended. That was an orchestration defect. The replacement runs a
 short controller every30 minutes at minutes17 and47 UTC. It records intent and
-the Databricks run ID in /Shared/earthquake-watch/_automation_state, a small
+the Databricks run ID in /Users/<token-user>/earthquake-watch/_automation_state, a small
 workspace notebook containing JSON metadata, not executable pipeline logic or
 earthquake payloads. A running Spark Job is polled once; the GitHub runner exits.
 The next scheduled tick continues automatically. No operator copies run IDs.
@@ -25,7 +25,7 @@ The handoff Job becomes one Serverless notebook
 task, rather than seven separately initialized task sessions. The controller
 assembles repository notebook includes into two self-contained source notebooks
 at deployment, so nested %run widget defaults cannot mask Job/reset parameters.
-The workspace receives automated_setup and automated_pipeline only. All code
+The token owner's workspace folder receives automated_setup and automated_pipeline only. All code
 remains reviewable as ordinary repository files. Code changes deploy only after
 an active Job terminates; a code fingerprint avoids redeploying for docs-only commits.
 
@@ -123,7 +123,7 @@ EQ_AUTOMATION_ENABLED=false disables future scheduled ticks for maintenance.
 It does not cancel an already active Databricks run.
 
 The existing Databricks token needs manage access to the named project Jobs,
-write access to /Shared/earthquake-watch, and ownership/manage rights for the
+write access to its own `/Users/<token-user>/earthquake-watch` folder, and ownership/manage rights for the
 project tables/Volumes. The Kafka identity needs describe/create/delete on the
 two named project topics and delete on the project consumer groups. Permission
 denials fail visibly; the code does not change accounts or bypass ACLs.
@@ -246,6 +246,8 @@ watermarks/audits. Safety VACUUM and rollback remain explicit exceptional action
 
 - [Jobs list](https://docs.databricks.com/api/jobs/v2/list-jobs): exact
   case-insensitive name filtering and paginated Job discovery.
+- [Current user](https://docs.databricks.com/api/scim/v1/list-users): the
+  authenticated identity supplies its owned `/Users/<user>` workspace path.
 - [Serverless Jobs compute](https://docs.databricks.com/aws/en/jobs/compute):
   supported notebook tasks default to managed Serverless without classic clusters.
 - [Databricks Jobs run-now](https://docs.databricks.com/api/jobs/v2/run-now):
@@ -270,6 +272,6 @@ data engines. Real Aiven deletion/ACLs, workspace import, Serverless consolidate
 execution, managed reset, automatic cleanup and free-tier usage still require
 the first cloud run. No production/cloud validation is claimed from mocks.
 
-Delivery verification:234 offline tests pass with no skips;45 Python files pass
+Delivery verification:236 offline tests pass with no skips;45 Python files pass
 syntax/purpose/docstrings; eight workflow YAML files parse; both assembled
 notebooks compile and contain no nested %run execution.

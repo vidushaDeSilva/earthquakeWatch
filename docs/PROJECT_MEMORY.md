@@ -1,6 +1,6 @@
 # Earthquake Impact Watchlist — project memory and implementation plan
 
-Status: implementation revision 12, 16 October 2026. Sprints1–6 cloud evidence remains as recorded below. Live Sprint7 runs exposed a40-minute GitHub wait expiry while Databricks continued. A later query showed ten pending captures and unverified tracked IDs during ongoing work. The user rejected manual recovery as routine operation and explicitly requested project-data reset code and fully automated continuation. Sections R–U, README.md and docs/AUTOMATION_V2.md now govern operation: one deployment, automatic scoped initial reset/Job setup, durable scheduled controller, consolidated task and automatic backlog/retry/publication/retention. Implementation is offline-verified; no cloud deletion, deployment or unattended acceptance of this revision has been performed.
+Status: implementation revision 13, 16 October 2026. Sprints1–6 cloud evidence remains as recorded below. Live Sprint7 runs exposed a40-minute GitHub wait expiry while Databricks continued. A later query showed ten pending captures and unverified tracked IDs during ongoing work. The user rejected manual recovery as routine operation and explicitly requested project-data reset code and fully automated continuation. Sections R–V, README.md and docs/AUTOMATION_V2.md now govern operation: one deployment, automatic scoped initial reset/Job setup, durable scheduled controller, consolidated task and automatic backlog/retry/publication/retention. Implementation is offline-verified; no cloud deletion, deployment or unattended acceptance of this revision has been performed.
 
 ## Goal and constraints
 
@@ -1386,3 +1386,24 @@ exact permission or request that needs repair without expanding sensitive logs.
 Verification:234 offline tests pass. The added test proves HTTP status and endpoint
 are retained while query values are absent.45 Python files pass syntax and
 explanatory-docstring checks. The next cloud run is required for diagnosis.
+
+## V. Token-owned Databricks workspace control path (16 October 2026)
+
+Revision12 live evidence identified `HTTP 403 during GET
+/api/2.0/workspace/export`. The controller could authenticate and reach
+Databricks, but it could not read the checkpoint under the previously fixed
+`/Shared/earthquake-watch` folder. The failure happened before jobs/run-now, so
+the absence of a new Databricks run is expected.
+
+Revision13 calls the current-user `Me` endpoint and validates `userName`, then
+binds the checkpoint and both assembled notebooks to
+`/Users/<token-user>/earthquake-watch`. This home folder is owned by the caller.
+The Job definition receives the resolved notebook path. The path rejects slash,
+control and traversal identities. The inaccessible Shared object is ignored; it
+is not deleted or used as evidence. A fresh private journal begins the already
+authorized one-time reset.
+
+Verification:236 offline tests pass. New tests prove current-user home binding
+and rejection of an unsafe identity path.45 Python files pass syntax and
+explanatory-docstring checks. Live current-user access, private workspace import,
+Job reconfiguration and run submission remain the next cloud gates.

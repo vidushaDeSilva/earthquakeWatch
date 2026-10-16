@@ -295,8 +295,9 @@ class JournalTests(unittest.TestCase):
     def test_journal_does_not_execute_code(self):
         """A changed workspace notebook is treated as invalid input, never eval input."""
         source = "import os\nSTATE_JSON = '{}'"
-        api = SimpleNamespace(request=lambda *args, **kwargs: {
-            "content": base64.b64encode(source.encode()).decode()})
+        api = SimpleNamespace(workspace_path=lambda name="": "/Users/test/earthquake-watch" +
+            (("/" + name) if name else ""), request=lambda *args, **kwargs: {
+                "content": base64.b64encode(source.encode()).decode()})
         with self.assertRaises(ContractError):
             WorkspaceJournal(api).load()
 
@@ -310,7 +311,8 @@ class JournalTests(unittest.TestCase):
             if "export" in path:
                 return content
             return {}
-        journal = WorkspaceJournal(SimpleNamespace(request=request))
+        journal = WorkspaceJournal(SimpleNamespace(request=request,
+            workspace_path=lambda name="": "/Users/test/earthquake-watch" + (("/" + name) if name else "")))
         journal.save({"controller_version": 2, "phase": "CHECKS"})
         self.assertEqual(journal.load()["phase"], "CHECKS")
 
@@ -364,7 +366,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def api(self, handler):
         """Inject transport without constructing live service credentials."""
-        api = CloudAPI(None, None)
+        api = CloudAPI(None, None, workspace="/Users/test@example.com/earthquake-watch")
         api.request = handler
         api.deploy = lambda directory: None
         return api
@@ -472,6 +474,19 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 403)
         self.assertEqual(caught.exception.operation, "GET /api/2.2/jobs/get")
         self.assertNotIn("secret-value", str(caught.exception))
+
+    def test_current_user_binds_owned_workspace(self):
+        """Control notebooks and journal avoid mutable ACLs in the Shared folder."""
+        api = self.api(lambda *args, **kwargs: {"userName": "owner@example.com"})
+        self.assertEqual(api.bind_caller_workspace(), "/Users/owner@example.com/earthquake-watch")
+        self.assertEqual(api.workspace_path("_automation_state"),
+                         "/Users/owner@example.com/earthquake-watch/_automation_state")
+
+    def test_unsafe_current_user_path_is_rejected(self):
+        """An identity cannot escape its user home through path separators."""
+        api = self.api(lambda *args, **kwargs: {"userName": "../Shared"})
+        with self.assertRaises(ContractError):
+            api.bind_caller_workspace()
 
 
 class KafkaResetTests(unittest.TestCase):

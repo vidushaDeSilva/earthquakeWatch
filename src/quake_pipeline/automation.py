@@ -405,6 +405,7 @@ def main(argv=None):
         # Independent request counters must not collide in the source run ledger.
         control_http = HTTPClient(replace(settings, run_seconds=600, max_requests=500), lambda _: None)
         api = CloudAPI(settings, control_http)
+        api.bind_caller_workspace()
         journal = WorkspaceJournal(api)
         job_id, job_ids = api.project_job_ids(os.environ.get("EQ_HANDOFF_LEDGER_JOB_ID", ""),
                                             os.environ.get("EQ_CAPTURE_LEDGER_JOB_ID", ""))

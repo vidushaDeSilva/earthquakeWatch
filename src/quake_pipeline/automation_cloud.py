@@ -14,8 +14,6 @@ from .contracts import decode_json, json_bytes
 from .errors import ConfigurationError, ContractError, HTTPFailure
 from .http import transport
 
-WORKSPACE = "/Shared/earthquake-watch"
-STATE_PATH = WORKSPACE + "/_automation_state"
 TERMINAL = {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"}
 
 
@@ -49,9 +47,27 @@ def inline_notebook(path, directory, stack=(), libraries=None):
 class CloudAPI:
     """Use bounded authenticated requests without printing credentials or provider bodies."""
 
-    def __init__(self, settings, http, sender=transport):
-        """Share the established retry policy for GET and tokenized run-now requests."""
+    def __init__(self, settings, http, sender=transport, workspace=None):
+        """Share retry policy and bind workspace assets only after caller discovery."""
         self.settings, self.http, self.sender = settings, http, sender
+        self.workspace = workspace
+
+    def bind_caller_workspace(self):
+        """Place private control assets in the authenticated user's owned home folder."""
+        identity = self.request("GET", "/api/2.0/preview/scim/v2/Me")
+        username = identity.get("userName")
+        if (not isinstance(username, str) or not 1 <= len(username) <= 254
+                or username in (".", "..") or "/" in username
+                or any(ord(character) < 32 for character in username)):
+            raise ContractError("Databricks current-user response has an unsafe workspace identity")
+        self.workspace = "/Users/" + username + "/earthquake-watch"
+        return self.workspace
+
+    def workspace_path(self, name=""):
+        """Require caller binding before constructing a notebook or journal path."""
+        if not self.workspace or not self.workspace.startswith("/Users/"):
+            raise ConfigurationError("Databricks caller workspace was not initialized")
+        return self.workspace + (("/" + name) if name else "")
 
     def request(self, method, path, body=None, expected=(200,)):
         """Never blindly retry an unkeyed configuration POST after an ambiguous reply."""
@@ -116,7 +132,7 @@ class CloudAPI:
                     "max_concurrent_runs": 1, "queue": {"enabled": False}, "timeout_seconds": 7500,
                     "tasks": [{"task_key": "automated_setup", "timeout_seconds": 7200,
                         "max_retries": 0, "notebook_task": {
-                            "notebook_path": WORKSPACE + "/automated_setup", "source": "WORKSPACE"}}]})
+                            "notebook_path": self.workspace_path("automated_setup"), "source": "WORKSPACE"}}]})
                 job_id = int(created["job_id"])
         ids = [job_id]
         capture_found = False
@@ -187,7 +203,8 @@ class CloudAPI:
         # this exact allowlisted Job removes that compute reference and migrates
         # it to the single managed Serverless task below.
         task = {"task_key": "automated_setup" if setup else "automated_pipeline",
-            "notebook_task": {"notebook_path": WORKSPACE + ("/automated_setup" if setup else "/automated_pipeline"),
+            "notebook_task": {"notebook_path": self.workspace_path(
+                                  "automated_setup" if setup else "automated_pipeline"),
                               "source": "WORKSPACE"},
             "timeout_seconds": 7200, "max_retries": 0}
         if tasks and tasks[0].get("environment_key"):
@@ -205,11 +222,11 @@ class CloudAPI:
 
     def deploy(self, directory):
         """Import repository code only; never copy cloud data to the runner."""
-        self.request("POST", "/api/2.0/workspace/mkdirs", {"path": WORKSPACE})
+        self.request("POST", "/api/2.0/workspace/mkdirs", {"path": self.workspace_path()})
         for name in ("automated_setup", "automated_pipeline"):
             path = Path(directory) / (name + ".py")
             source = inline_notebook(path, directory).encode()
-            self.request("POST", "/api/2.0/workspace/import", {"path": WORKSPACE + "/" + path.stem,
+            self.request("POST", "/api/2.0/workspace/import", {"path": self.workspace_path(path.stem),
                 "format": "SOURCE", "language": "PYTHON", "overwrite": True,
                 "content": base64.b64encode(source).decode()})
 
@@ -220,11 +237,12 @@ class WorkspaceJournal:
     def __init__(self, api):
         """Bind one fixed private workspace object, never a caller-supplied path."""
         self.api = api
+        self.state_path = api.workspace_path("_automation_state")
 
     def load(self):
         """Parse an assignment as data; the journal is never executed as Python."""
         result = self.api.request("GET", "/api/2.0/workspace/export?" + urlencode({
-            "path": STATE_PATH, "format": "SOURCE"}), expected=(200, 404))
+            "path": self.state_path, "format": "SOURCE"}), expected=(200, 404))
         if result is None:
             return None
         try:
@@ -245,8 +263,8 @@ class WorkspaceJournal:
         """Overwrite under the repository's single-writer lock and verify exact readback."""
         encoded = json_bytes(state).decode()
         source = "# Databricks notebook source\n# Automation metadata; do not run or edit.\nSTATE_JSON = " + repr(encoded) + "\n"
-        self.api.request("POST", "/api/2.0/workspace/mkdirs", {"path": WORKSPACE})
-        self.api.request("POST", "/api/2.0/workspace/import", {"path": STATE_PATH,
+        self.api.request("POST", "/api/2.0/workspace/mkdirs", {"path": self.api.workspace_path()})
+        self.api.request("POST", "/api/2.0/workspace/import", {"path": self.state_path,
             "format": "SOURCE", "language": "PYTHON", "overwrite": True,
             "content": base64.b64encode(source.encode()).decode()})
         if self.load() != state:
