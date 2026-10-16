@@ -29,8 +29,7 @@ def process_silver_operation(run_id):
     """Certify a bounded work group and report any durable remaining backlog."""
     selected, remaining = silver_store.silver_batches(silver_recheck == "true", silver_maximum)
     metrics = SilverEngine(silver_store, run_id, silver_failure).process(selected)
-    if remaining:
-        raise SilverError("Bounded Silver work remains; rerun with silver_recheck=false")
+    metrics["remaining_batches"] = bool(remaining)
     return metrics
 
 

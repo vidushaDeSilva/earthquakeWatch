@@ -499,11 +499,11 @@ class BronzeTests(unittest.TestCase):
         from quake_pipeline.errors import ConfigurationError
         config = Settings(host="https://dbc-example.cloud.databricks.com", token="test")
         with self.assertRaises(ConfigurationError):
-            sync_ledger(config, 1, "token", None, wait_seconds=2401)
+            sync_ledger(config, 1, "token", None, wait_seconds=7201)
 
 
-    def test_notebook_orchestrator_success_and_pending_failure(self):
-        """Run actual notebook control flow and verify truthful terminal status."""
+    def test_notebook_orchestrator_success_and_pending_progress(self):
+        """A bounded successful pass reports incomplete capture progress without failing."""
         import contextlib
         import io
         notebook = Path(__file__).resolve().parents[1] / "databricks/sprint_04_process_bronze.py"
@@ -532,13 +532,11 @@ class BronzeTests(unittest.TestCase):
                     dbutils=SimpleNamespace(widgets=SimpleNamespace(text=lambda *args: None, get=widgets.get)),
                     SparkBronzeStore=lambda *args: store)
                 with contextlib.redirect_stdout(io.StringIO()):
-                    if incomplete:
-                        with self.assertRaises(s4.BronzeError):
-                            exec(code, namespace)
-                    else:
-                        exec(code, namespace)
+                    exec(code, namespace)
                 run = next(iter(store.tables["ops.runs"].values()))
-                self.assertEqual(run["status"], "FAILED" if incomplete else "SUCCESS")
+                self.assertEqual(run["status"], "SUCCESS")
+                attempt = next(iter(store.tables["ops.stage_attempts"].values()))
+                self.assertEqual(attempt["metrics"]["pending_captures"], "2" if incomplete else "0")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,10 @@
 # Sprints 7–8: recovery, source checks, retention and rollback
 
+Routine operation is superseded by docs/AUTOMATION_V2.md. The scheduled durable
+controller replaces manual recovery/cycle/maintenance workflow launches. The
+older instructions below describe the prior implementation and exceptional
+recovery design; do not use them as the automated deployment procedure.
+
 Implementation handoff, 15 October 2026. Apply over the delivered Sprints 1–6.
 The user's current remote repository was not inspected; compare complete
 replacement files with any local changes before copying. The assistant has not
@@ -189,6 +194,21 @@ This automatically discovers the pending captures, dispatches frozen bytes,
 lands them, and invokes the same Job through Silver/reconciliation/Gold preview.
 Look for DISPATCH_VERIFIED, LANDING_COMMITTED, RECONCILIATION_RESULT and
 PASS Sprint 7 recovery. Actual printed spacing follows the source code.
+
+### An existing Job outlives GitHub's wait
+
+The earlier Sprint 7 runner stopped polling after40 minutes, although the
+Databricks Job could continue. The updated runner waits up to120 minutes per
+Job phase, with a330-minute GitHub job timeout for the two-phase cycle. A timeout
+does not cancel the Databricks run and is not proof of a data-processing error.
+Never launch another recovery while its Job is still running. To attach to an
+existing run without Kafka dispatch, choose action=wait and enter the numeric
+Databricks run ID printed in LEDGER_JOB_STARTED under databricks_run_id. Other
+inputs may stay at defaults. The wait action only polls Jobs/runs/get, and can
+be repeated if the bounded wait expires again. On terminal failure, inspect the
+specific failed task in the Databricks Job. On terminal success, inspect pending
+captures and batches before deciding whether another recover pass is necessary.
+The current older active run is unaffected by committing this repository update.
 
 Run sprint_07_08_acceptance.sql statements separately. The pending-captures query
 should return zero rows, counts should agree per capture, and all batches should

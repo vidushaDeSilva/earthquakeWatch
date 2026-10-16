@@ -21,7 +21,7 @@ from .contracts import (CONTRACT_VERSION, SOURCES, collection_window, decode_jso
                         digest, json_bytes, parse_utc, stable_id, utc_text, validate_feed)
 from .errors import BudgetExceeded, ContractError, PipelineError
 from .http import HTTPClient, Response
-from .jobs import sync_ledger
+from .jobs import sync_ledger, wait_ledger
 from .kafka_client import KafkaClient
 from .kafka_config import KafkaSettings
 from .landing import land
@@ -387,20 +387,31 @@ def repair_gap(settings, client, volume, kafka, stream, gid, run_id, emit):
 def main(argv=None):
     """Run recovery/cycle/backfill in one bounded cloud workflow without local data files."""
     parser = argparse.ArgumentParser(description="Sprint 7 source recovery and reconciliation")
-    parser.add_argument("--action", choices=("recover", "cycle", "backfill", "gap-plan", "repair-gap"), default="recover")
+    parser.add_argument("--action", choices=("recover", "cycle", "backfill", "gap-plan", "repair-gap", "wait"), default="recover")
     parser.add_argument("--epoch", required=True)
     parser.add_argument("--gap-plan-id", default="")
     parser.add_argument("--start")
     parser.add_argument("--end")
     parser.add_argument("--max-captures", type=int, default=16)
+    parser.add_argument("--databricks-run-id", default="")
     args = parser.parse_args(argv)
     kafka, volume, report, events = None, None, None, []
     succeeded = False
     try:
-        settings = replace(Settings.from_env(), max_requests=6000, run_seconds=8400)
+        settings = replace(Settings.from_env(), max_requests=6000, run_seconds=18000)
         settings.require_cloud()
         if settings.environment != "dev":
             raise ContractError("Sprint 7 requires the development environment")
+        if args.action == "wait":
+            if not args.databricks_run_id.isdigit():
+                raise ContractError("Wait requires --databricks-run-id from LEDGER_JOB_STARTED")
+            client = HTTPClient(settings, events.append)
+            print(json_bytes({"event": "LEDGER_JOB_ATTACHED", "databricks_run_id": args.databricks_run_id}).decode(), flush=True)
+            wait_ledger(settings, args.databricks_run_id, client, wait_seconds=7200)
+            print("PASS existing Databricks run " + args.databricks_run_id, flush=True)
+            return 0
+        if args.databricks_run_id:
+            raise ContractError("--databricks-run-id is only for action=wait")
         stream = KafkaSettings.from_env(os.environ)
         events, run_id = [], stable_id("reconciliation-run-v1", args.epoch, os.getenv("GITHUB_RUN_ID", uuid.uuid4().hex), os.getenv("GITHUB_RUN_ATTEMPT", "1"))
         client = HTTPClient(settings, events.append)
@@ -419,7 +430,7 @@ def main(argv=None):
         def launch(phase):
             """Use stable per-phase launch tokens and force maintenance off during ingestion."""
             return sync_ledger(settings, job_id, stable_id("s7-job-v1", run_id, phase), client,
-                wait_seconds=2400, parameters={"gold_action": "preview", "reconcile_mode": phase,
+                wait_seconds=7200, parameters={"gold_action": "preview", "reconcile_mode": phase,
                     "maintenance_action": "none", "volume_root": settings.volume_root})
 
         if args.action == "gap-plan":

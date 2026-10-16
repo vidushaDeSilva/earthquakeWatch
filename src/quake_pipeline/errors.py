@@ -36,6 +36,11 @@ class DeferredError(PipelineError):
 
     code = "RETRY_DEFERRED"
 
+    def __init__(self, message, retry_after_seconds=0):
+        """Expose only the upstream delay needed by a future scheduled tick."""
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(message)
+
 
 class HTTPFailure(PipelineError):
     """An external service returned a terminal or exhausted HTTP failure."""

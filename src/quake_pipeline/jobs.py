@@ -23,8 +23,8 @@ def sync_ledger(settings: Settings, job_id: int, token: str, client: HTTPClient,
                 wait_seconds: int = 600, parameters: dict[str, str] | None = None) -> str:
     """Launch once per token, then poll the existing run rather than creating duplicates."""
     settings.require_cloud()
-    if not 60 <= wait_seconds <= 2400:
-        raise ConfigurationError("Job wait must be between 60 and 2400 seconds")
+    if not 60 <= wait_seconds <= 7200:
+        raise ConfigurationError("Job wait must be between 60 and 7200 seconds")
     if job_id <= 0:
         raise ConfigurationError("EQ_CAPTURE_LEDGER_JOB_ID must be a positive numeric Job ID")
     headers = {"Authorization": f"Bearer {settings.token}", "Content-Type": "application/json"}
@@ -37,7 +37,20 @@ def sync_ledger(settings: Settings, job_id: int, token: str, client: HTTPClient,
         raise ContractError("Databricks launch response has no numeric run_id")
     run_id = str(launched["run_id"])
     emit({"event": "LEDGER_JOB_STARTED", "databricks_run_id": run_id})
+    return wait_ledger(settings, run_id, client, sleeper, monotonic, wait_seconds)
+
+
+def wait_ledger(settings: Settings, run_id: str, client: HTTPClient,
+                sleeper: Callable[[float], None] = time.sleep,
+                monotonic: Callable[[], float] = time.monotonic,
+                wait_seconds: int = 7200) -> str:
+    """Poll an existing run without submitting another Job or replaying source data."""
+    settings.require_cloud()
+    if not run_id.isdigit() or not 60 <= wait_seconds <= 7200:
+        raise ConfigurationError("Provide a numeric run ID and a 60..7200 second wait")
+    headers = {"Authorization": f"Bearer {settings.token}"}
     deadline = monotonic() + wait_seconds
+    last_reported = None
     while monotonic() < deadline:
         result = client.request("databricks", "GET", settings.host +
                                 "/api/2.2/jobs/runs/get?run_id=" + run_id, headers=headers)
@@ -45,10 +58,15 @@ def sync_ledger(settings: Settings, job_id: int, token: str, client: HTTPClient,
         if not isinstance(run, dict) or not isinstance(run.get("state"), dict):
             raise ContractError("Databricks run response is missing its state")
         state = run["state"]
-        if state.get("result_state") == "SUCCESS":
+        lifecycle = state.get("life_cycle_state")
+        if lifecycle == "TERMINATED" and state.get("result_state") == "SUCCESS":
+            emit({"event": "LEDGER_JOB_SUCCEEDED", "databricks_run_id": run_id})
             return run_id
-        if state.get("life_cycle_state") in {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"}:
+        if lifecycle in {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"}:
             raise PipelineError(f"Databricks pipeline job failed; inspect Databricks run {run_id}")
+        if lifecycle != last_reported:
+            emit({"event": "LEDGER_JOB_WAITING", "databricks_run_id": run_id, "state": lifecycle})
+            last_reported = lifecycle
         sleeper(10)
     raise BudgetExceeded(f"Databricks pipeline job still running; inspect Databricks run {run_id} before recovery")
 

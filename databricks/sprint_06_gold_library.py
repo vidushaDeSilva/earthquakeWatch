@@ -213,7 +213,7 @@ class GoldEngine:
 
     def process(self, action="preview", as_of=None, retry_id=None, policy_version="impact-v1", generation="v1"):
         """Build a preview or publish a release; retries reuse every persisted input pin."""
-        if action not in ("preview", "publish") or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", generation):
+        if action not in ("preview", "publish", "auto") or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", generation):
             raise GoldError("Invalid Gold action or processing generation")
         existing = self.store.publication(retry_id) if retry_id else None
         if retry_id and existing is None:
@@ -268,6 +268,8 @@ class GoldEngine:
             publication["output_table_versions"][name] = self.store.table_version(name)
             publication["output_hashes"][name] = s56_digest(rows, GOLD_KEYS[name])
         issues = publication["blocking_issues"]
+        if action == "auto":
+            action = "preview" if issues else "publish"
         self.store.stage_check(self.run_id, "GOLD", "publication_coverage", "WARN" if issues else "PASS",
                                len(issues), "0", {"publication_id": publication["publication_id"], "issues": issues})
         if action == "preview":

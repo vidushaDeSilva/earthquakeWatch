@@ -1,6 +1,6 @@
 # Earthquake Impact Watchlist — project memory and implementation plan
 
-Status: implementation revision 8, 15 October 2026. Sprint 1–4 main cloud paths are evidenced. User-provided Sprint 5 results show 24 SILVER_COMMITTED batches, 1,887 current events, 1,889 history versions and no current conflicts/withdrawals. Sprint 6 preview is BUILDING/PARTIAL; activation/failure gates remain unconfirmed. Two historical CAPTURED day responses remain in the latest screenshot. Sprints 7–8 recovery/lifecycle implementation and offline verification are delivered; their deployment, live recovery, publication, cleanup, rollback and quota gates remain pending. Section P records this delivery.
+Status: implementation revision 10, 16 October 2026. Sprints1–6 cloud evidence remains as recorded below. Live Sprint7 runs exposed a40-minute GitHub wait expiry while Databricks continued. A later query showed ten pending captures and unverified tracked IDs during ongoing work. The user rejected manual recovery as routine operation and explicitly requested project-data reset code and fully automated continuation. Sections R–S, README.md and docs/AUTOMATION_V2.md now govern operation: one deployment, automatic scoped initial reset/Job setup, durable scheduled controller, consolidated task and automatic backlog/retry/publication/retention. Implementation is offline-verified; no cloud deletion, deployment or unattended acceptance of this revision has been performed.
 
 ## Goal and constraints
 
@@ -20,7 +20,7 @@ Build an automated, cloud-only data engineering portfolio project that regularly
 - No persistent data on the user's computer or GitHub runner. No always-on service and no third-party monitoring service. Logs must not contain payloads or credentials.
 - Airflow is deferred: GitHub Actions and Databricks Jobs already cover the initial scheduling and processing dependencies.
 - Direct Databricks-to-Aiven connectivity has not been proven; use the tested GitHub-runner bridge.
-- Keep a manual dispatch/backfill path. Serialise ingestion and reconciliation against the same tables. Treat free-tier limits as a design constraint and verify use after deployment.
+- Routine operation uses one scheduled durable controller; no operator-run capture/recover/cycle sequence. Exceptional replay/backfill remains controlled code, not a competing routine writer. Serialise ingestion and reconciliation. Treat free-tier limits as a constraint and verify use after deployment.
 
 ## What is already validated
 
@@ -1218,3 +1218,129 @@ managed vacuum/default retention and notebook cell requirements. Links and
 specific verified behavior are recorded in the handoff. User coding conventions
 remain mandatory: file purpose, docstrings, essential comments, complete new/
 replacement files and exact deployment instructions in the chat and package.
+
+## Q. Sprint 7 cloud wait-budget repair (16 October 2026)
+
+First live recovery delivered frozen captures and landed batches, but GitHub's
+40-minute Databricks poll expired while the Databricks Job continued. The runner
+must distinguish this bounded wait from a terminal Job failure. Do not infer
+51 sealed batches are all pending or attribute ten pending captures to one cause
+without per-capture evidence. A subsequent query showed BLOCKED reconciliation,
+PENDING_CAPTURES and TRACKED_EVENT_UNVERIFIED while newer Jobs were active.
+
+Code repair: Sprint 7 Job polling is now bounded at120 minutes per phase;
+workflow timeout is330 minutes for a possible two-phase cycle. Action=wait with
+databricks_run_id polls an existing run only and bypasses Kafka/Volume dispatch.
+It can be repeated if a very long Job remains active; it does not cancel or
+submit a new Job. Terminal SUCCESS requires TERMINATED plus SUCCESS, and other
+terminal states fail. The current already-running Job cannot adopt new runner
+code; wait for its state or use the updated wait action after deployment.
+No Databricks/Kafka changes or live runtime acceptance of this patch are claimed.
+Existing data must not be reset to recover from a polling timeout. Offline tests
+exercise QUEUED/RUNNING/TERMINATED transitions, no relaunch, and wait expiry.
+
+## R. Durable automation and explicitly requested clean reset (16 October 2026)
+
+User explicitly rejected manual retry as routine operation and requested code
+to clear project Databricks/Kafka data and revise orchestration. A reset is now
+authorized for the named earthquake development/smoke assets, not unrelated
+workspace catalogs or all topics in an Aiven service. No cloud deletion has been
+performed by the assistant. The earlier wait-only patch is superseded for normal
+operation; its polling helper remains for exceptional inspection.
+
+One workflow, automated-pipeline.yml, runs short serialized ticks every30 minutes
+and deploys after code changes. The small cloud workspace _automation_state
+journal survives data reset. Persist launch token before run-now; uncertain
+replies/runner restarts reuse the same token/run. Poll active Jobs without an
+occupied runner; continue bounded Bronze/Silver backlog automatically. Three
+non-progress passes,32 passes/cycle, terminal retry limit3 and unsafe quality
+conditions surface explicit incidents. Saved Retry-After crosses ticks; known
+quota-labelled Job failures wait24h. Authentic permission/code/data faults are
+not silently repaired by skipping evidence or enabling paid resources.
+Repeated connection/service outages open a one-hour circuit and then retry
+automatically, preserving the same source phase and any active run token.
+
+The existing handoff Job is configured by API as one Serverless task. Repository
+notebook includes are statically expanded during deployment, preventing nested
+%run widget defaults from masking reset/processing parameters. Setup, source
+ledger, handoff ledger, Bronze, Silver, reconciliation, Gold and maintenance are
+automatically driven. Source payloads remain in Aiven, managed Volume/Delta or
+transient runner memory. The control journal and GitHub summaries hold metadata.
+Gold auto keeps a preview while blocked and publishes only through existing
+gates. A healthy release automatically snapshots and plans/revalidates/applies
+bounded retention. No automatic unsafe VACUUM or conflict winner is introduced.
+Month observations are daily; day/significant feeds refresh each observation
+cycle. The next cycle starts one hour after completion, subject to compute and
+scheduler availability. New observations do not accumulate ahead of pending work.
+
+Explicit reset workflow mode requires RESET_EARTHQUAKE_DEV and a stable reset ID.
+It cancels the old GitHub writer, pauses old project Job schedules, waits for
+Databricks cancellation, deletes/recreates earthquake_events_dev with a fresh
+stream generation/group, deletes earthquake_compat_smoke and matching inactive
+project groups, then resets managed dev/smoke data and runs all setup. Catalog
+containers, source notebooks, Job history and a small reset journal survive.
+Unknown schemas/tables in smoke/default areas, external assets, unrelated Job
+IDs/topics and missing privileges stop the reset. Kafka service/users/credentials
+are retained. Managed physical purge follows provider lifecycle; dropped Volumes
+are not recoverable. Cross-service reset uses a durable stage protocol, not a
+distributed transaction. Same completed reset ID cannot erase new data again.
+
+Six old manual mutation workflows become inactive notices. quality.yml remains.
+Install and merge the replacement files once, launch one intentional reset if
+wanted, then no manual notebook import, setup, per-batch recovery, run-ID copying,
+Gold promotion or routine retention launch is required. GitHub schedule delay,
+60-day inactivity auto-disable, Databricks quota/no SLA and existing finite
+inventory limits remain real constraints; do not claim infinite capacity or
+guaranteed uptime on free services. Live reset, API deployment, consolidated
+Serverless execution, autonomous recovery, cleanup and actual quotas remain gates.
+
+Verification for revision9:220 offline tests pass with no skips, including22 new
+controller/journal/reset/auto-publication tests and three earlier wait-helper
+tests.45 Python files pass syntax/purpose/docstring checks; eight workflow YAML
+files parse. Both consolidated notebook sources compile with no nested %run.
+Checks exercise70-minute active Jobs, lost launch ACKs, bounded backlog, terminal
+retry/backoff, quota delay, cross-tick Retry-After, connection circuit recovery,
+scope-confined reset and same-reset-ID safety. These are offline adapters and
+engine tests, not actual provider deletion or Serverless deployment evidence.
+
+## S. Single-deployment installation and automatic bootstrap (16 October 2026)
+
+The user repeated the request to simplify the whole project, not merely lengthen
+polling or require manual scripts. Revision10 removes the initial reset workflow
+selection, required Job-ID copying and local Python setup. Merge the reviewed
+project update into main/master once. The first default-branch push performs the
+already authorized project-only reset via config/automation.json, then rebuilds
+setup and starts the pipeline. Later ticks require no operator sequence.
+
+The only required repository variables are DATABRICKS_HOST and
+AIVEN_BOOTSTRAP_SERVERS. Existing four secrets remain DATABRICKS_TOKEN,
+AIVEN_KAFKA_USERNAME, AIVEN_KAFKA_PASSWORD and AIVEN_KAFKA_CA_PEM. Exact-name Job
+discovery adopts earthquake-dev-handoff-ledger and the old capture Job; the handoff
+Job is automatically created as one Serverless notebook task if absent. Optional
+numeric hints are checked; stale genuine404 hints fall back to discovery. Duplicate
+names or unrelated IDs fail safely. An unacknowledged Job create is discovered on
+the next tick rather than blindly repeated. No paid/classic cluster is enabled.
+
+The reviewed initial reset ID is clean-20261016. bootstrap_reset_completed is
+durable and separate from last_reset_id, so pushes and future explicitly named
+resets cannot accidentally repeat the original wipe. An incomplete reset retains
+its saved identity. Changing the configured initial ID requests a new wipe;
+deleting the journal can re-arm it. README and installation instructions must
+disclose automatic first-deployment deletion before any push command.
+
+Delivery includes a complete earthquake-watch repository snapshot and a separate
+NEW/REPLACE overlay against the delivered Sprints1–8 baseline. Choose one, retain
+the user's existing .git and review custom overlapping edits. Root README is now
+the operational entry point; old handoffs are historical. Source files retain
+purpose descriptions, docstrings and essential comments. No live resources have
+been removed while producing this revision.
+
+Verification:231 offline tests pass with no skips, including11 added reset-intent
+and Job-discovery cases.45 Python files pass syntax/purpose/docstrings. Eight
+workflow YAML files parse, both assembled notebook sources compile without nested
+%run. New cases prove one-time reset marking, later-reset safety, incomplete-reset
+priority, exact-name adoption, Serverless creation, duplicate/unrelated target
+refusal, stale hint fallback and discovery after a lost creation acknowledgement.
+Actual APIs, reset/ACLs, Serverless runtime and sustained free-tier usage remain
+cloud acceptance gates. Primary Jobs list, managed compute and GitHub scheduling
+documentation were checked before finalization; links are in AUTOMATION_V2.md.

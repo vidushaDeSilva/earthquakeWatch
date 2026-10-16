@@ -1,35 +1,11 @@
-# Purpose: rerun the same serialized Databricks Job against existing cloud files.
-# No source refetch, Kafka reset, deletion or schedule is performed by this workflow.
-name: Earthquake Bronze recovery (Sprint 4)
-
+# Purpose: prevent legacy entry points from racing the durable controller.
+name: Retired - bronze-recovery
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: earthquake-dev-ingestion
-  cancel-in-progress: false
-
 jobs:
-  recover:
+  retired:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      PYTHONPATH: src
-      PYTHONDONTWRITEBYTECODE: '1'
-      EQ_ENV: dev
-      EQ_VOLUME_ROOT: ${{ vars.EQ_VOLUME_ROOT }}
-      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      EQ_CAPTURE_LEDGER_JOB_ID: ${{ vars.EQ_HANDOFF_LEDGER_JOB_ID }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Reconcile cloud files and process pending Bronze batches
-        run: |
-          python -m quake_pipeline.jobs
-          echo 'PASS Sprint 4 Databricks Bronze recovery job'
+      - run: echo 'Use Earthquake automated pipeline. Scheduled ticks own all collection, recovery and maintenance.'

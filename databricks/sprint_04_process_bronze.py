@@ -40,12 +40,12 @@ try:
     engine = BronzeEngine(store, run_id, fail_at)
     processed = engine.process(bundles)
     pending_captures = engine.account_captures()
-    if remaining:
-        raise BronzeError("Bounded work remains; rerun the same Job with bronze_recheck=false")
-    if pending_captures:
-        raise BronzeError("Published captures remain unaccounted; land pending Kafka data or investigate replay")
+    # A successful bounded pass may leave work for the scheduled controller.
+    # Corrupt evidence still raises above; unfinished work is not corruption.
     run_row.update(status="SUCCESS", finished_at=datetime.now(timezone.utc))
-    attempt.update(status="SUCCESS", finished_at=run_row["finished_at"], metrics={"processed_batches": str(processed)})
+    attempt.update(status="SUCCESS", finished_at=run_row["finished_at"], metrics={
+        "processed_batches": str(processed), "remaining_batches": str(bool(remaining)),
+        "pending_captures": str(len(pending_captures))})
     print(f"PASS Sprint 4 Bronze ingestion: processed_batches={processed} run_id={run_id}")
 except Exception as exc:
     run_row.update(status="FAILED", finished_at=datetime.now(timezone.utc), error_class=type(exc).__name__)

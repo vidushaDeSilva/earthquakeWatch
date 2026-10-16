@@ -1,11 +1,14 @@
-# Purpose: append these local support/secret exclusions to the existing .gitignore.
+# Purpose: keep credentials, payloads and generated runtime files out of Git.
 .venv/
 __pycache__/
 *.py[cod]
-.DS_Store
 .env
 .env.*
 !.env.example
 *.pem
 *.key
+.DS_Store
 data/
+landing/
+downloads/
+.pytest_cache/

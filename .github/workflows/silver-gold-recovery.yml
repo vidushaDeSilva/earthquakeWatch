@@ -1,34 +1,11 @@
-# Purpose: run the existing serialized handoff Job through Silver and Gold.
-# Gold parameters come from Job defaults; preview remains the deployment default.
-name: Earthquake Silver and Gold recovery (Sprints 5-6)
-
+# Purpose: prevent legacy entry points from racing the durable controller.
+name: Retired - silver-gold-recovery
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: earthquake-dev-ingestion
-  cancel-in-progress: false
-
 jobs:
-  recover:
+  retired:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
-    env:
-      PYTHONPATH: src
-      PYTHONDONTWRITEBYTECODE: '1'
-      EQ_ENV: dev
-      EQ_VOLUME_ROOT: ${{ vars.EQ_VOLUME_ROOT }}
-      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      EQ_CAPTURE_LEDGER_JOB_ID: ${{ vars.EQ_HANDOFF_LEDGER_JOB_ID }}
-      EQ_LEDGER_WAIT_SECONDS: '2400'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Process existing cloud evidence through the same five-task Job
-        run: python -m quake_pipeline.jobs
+      - run: echo 'Use Earthquake automated pipeline. Scheduled ticks own all collection, recovery and maintenance.'

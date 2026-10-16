@@ -1,65 +1,11 @@
-# Purpose: manually validate or freeze USGS source responses for Sprints 1–2.
-# Scheduling is intentionally enabled only after the Sprint 3–4 safety gates.
-name: Earthquake source capture (Sprints 1-2)
-
+# Purpose: prevent legacy entry points from racing the durable controller.
+name: Retired - source-capture
 on:
   workflow_dispatch:
-    inputs:
-      action:
-        description: Configuration check, read-only USGS check, or cloud capture
-        required: true
-        default: preflight
-        type: choice
-        options: [preflight, dry-run, capture]
-      mode:
-        description: Hourly past-day feed or daily 30-day reconciliation feeds
-        required: true
-        default: hourly
-        type: choice
-        options: [hourly, reconcile]
-      window_end:
-        description: Optional aligned UTC interval end; leave blank for current interval
-        required: false
-        default: ''
-        type: string
-
 permissions:
   contents: read
-
-concurrency:
-  group: earthquake-dev-ingestion
-  cancel-in-progress: false
-
 jobs:
-  capture:
+  retired:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    env:
-      PYTHONPATH: src
-      PYTHONDONTWRITEBYTECODE: '1'
-      EQ_ENV: dev
-      EQ_VOLUME_ROOT: ${{ vars.EQ_VOLUME_ROOT }}
-      EQ_COLLECTION_GENERATION: ${{ vars.EQ_COLLECTION_GENERATION }}
-      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      EQ_CAPTURE_LEDGER_JOB_ID: ${{ vars.EQ_CAPTURE_LEDGER_JOB_ID }}
-      CAPTURE_ACTION: ${{ inputs.action }}
-      CAPTURE_MODE: ${{ inputs.mode }}
-      CAPTURE_WINDOW_END: ${{ inputs.window_end }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Verify contracts and recovery behavior
-        run: python -m unittest discover -s tests -v
-      - name: Run source capture
-        run: |
-          args=(--action "$CAPTURE_ACTION" --mode "$CAPTURE_MODE")
-          if [ -n "$CAPTURE_WINDOW_END" ]; then
-            args+=(--window-end "$CAPTURE_WINDOW_END")
-          fi
-          python -m quake_pipeline.cli "${args[@]}"
-      - name: Import verified captures into Databricks operations tables
-        if: inputs.action == 'capture'
-        run: python -m quake_pipeline.jobs
+      - run: echo 'Use Earthquake automated pipeline. Scheduled ticks own all collection, recovery and maintenance.'

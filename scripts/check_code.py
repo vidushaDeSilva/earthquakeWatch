@@ -12,8 +12,8 @@ def main() -> int:
     """Fail when an owned Python file has invalid syntax or missing docstrings."""
     root = Path(__file__).resolve().parents[1]
     paths = [*root.joinpath("src/quake_pipeline").rglob("*.py"),
-             *root.joinpath("tests").glob("test_sprint*.py"),
-             *root.joinpath("databricks").glob("sprint*.py"), Path(__file__)]
+             *root.joinpath("tests").glob("test_*.py"),
+             *root.joinpath("databricks").glob("*.py"), Path(__file__)]
     errors = []
     for path in sorted(set(paths)):
         try:

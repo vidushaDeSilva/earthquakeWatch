@@ -1,81 +1,11 @@
-# Purpose: drain frozen capture backlog, check tracked events or perform bounded catalog recovery.
-name: Earthquake reconciliation and recovery (Sprint 7)
-
+# Purpose: prevent legacy entry points from racing the durable controller.
+name: Retired - reconcile-recover
 on:
   workflow_dispatch:
-    inputs:
-      action:
-        description: Start with recover; cycle fetches fresh feeds and tracked event checks
-        type: choice
-        default: recover
-        options: [recover, cycle, backfill, gap-plan, repair-gap]
-      epoch:
-        description: Blank uses this workflow run ID; keep the same value for a frozen retry
-        type: string
-        default: ''
-      start:
-        description: Backfill only, complete UTC-day start such as 2026-10-01T00:00:00Z
-        type: string
-        default: ''
-      end:
-        description: Backfill only, exclusive UTC-day end, at most seven days after start
-        type: string
-        default: ''
-      gap_plan_id:
-        description: Only repair-gap, exact reviewed GAP_PLAN_ID from gap-plan
-        type: string
-        default: ''
-      max_captures:
-        description: Maximum frozen captures per dispatch pass, 1..32
-        type: string
-        default: '16'
-
 permissions:
   contents: read
-concurrency:
-  group: earthquake-dev-ingestion
-  cancel-in-progress: false
-
 jobs:
-  recover:
+  retired:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
-    env:
-      PYTHONPATH: src
-      PYTHONDONTWRITEBYTECODE: '1'
-      EQ_ENV: dev
-      EQ_VOLUME_ROOT: ${{ vars.EQ_VOLUME_ROOT }}
-      EQ_COLLECTION_GENERATION: ${{ vars.EQ_COLLECTION_GENERATION }}
-      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      EQ_HANDOFF_LEDGER_JOB_ID: ${{ vars.EQ_HANDOFF_LEDGER_JOB_ID }}
-      AIVEN_BOOTSTRAP_SERVERS: ${{ vars.AIVEN_BOOTSTRAP_SERVERS }}
-      AIVEN_KAFKA_USERNAME: ${{ secrets.AIVEN_KAFKA_USERNAME }}
-      AIVEN_KAFKA_PASSWORD: ${{ secrets.AIVEN_KAFKA_PASSWORD }}
-      AIVEN_KAFKA_CA_PEM: ${{ secrets.AIVEN_KAFKA_CA_PEM }}
-      EQ_KAFKA_TOPIC: ${{ vars.EQ_KAFKA_TOPIC }}
-      EQ_KAFKA_CONSUMER_GROUP: ${{ vars.EQ_KAFKA_CONSUMER_GROUP }}
-      EQ_STREAM_GENERATION: ${{ vars.EQ_STREAM_GENERATION }}
-      EQ_DISPATCH_GENERATION: v1
-      RECOVERY_ACTION: ${{ inputs.action }}
-      RECOVERY_EPOCH: ${{ inputs.epoch }}
-      RANGE_START: ${{ inputs.start }}
-      RANGE_END: ${{ inputs.end }}
-      GAP_PLAN_ID: ${{ inputs.gap_plan_id }}
-      MAX_CAPTURES: ${{ inputs.max_captures }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install pinned Kafka client
-        run: python -m pip install -r requirements-kafka.txt
-      - name: Recover with cloud-only data and the existing serialized Job
-        run: |
-          epoch="$RECOVERY_EPOCH"
-          if [ -z "$epoch" ]; then epoch="run-${GITHUB_RUN_ID}"; fi
-          args=(--action "$RECOVERY_ACTION" --epoch "$epoch" --max-captures "$MAX_CAPTURES")
-          if [ -n "$RANGE_START" ]; then args+=(--start "$RANGE_START"); fi
-          if [ -n "$RANGE_END" ]; then args+=(--end "$RANGE_END"); fi
-          if [ -n "$GAP_PLAN_ID" ]; then args+=(--gap-plan-id "$GAP_PLAN_ID"); fi
-          python -m quake_pipeline.reconciliation "${args[@]}"
+      - run: echo 'Use Earthquake automated pipeline. Scheduled ticks own all collection, recovery and maintenance.'

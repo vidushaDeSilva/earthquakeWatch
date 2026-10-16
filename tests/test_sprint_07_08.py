@@ -17,7 +17,7 @@ from quake_pipeline.config import Settings
 from quake_pipeline.contracts import SOURCES, decode_json, digest, json_bytes, stable_id, utc_text
 from quake_pipeline.errors import BudgetExceeded, ContentConflict, ContractError
 from quake_pipeline.http import Response
-from quake_pipeline.jobs import sync_ledger
+from quake_pipeline.jobs import sync_ledger, wait_ledger
 from quake_pipeline.outbox import InjectedFailure, bind_stream, stream_id
 from quake_pipeline.landing import land, recover
 from quake_pipeline.reconciliation import (CatalogCollector, checked_source, gap_plan,
@@ -48,6 +48,35 @@ class QueueHTTP:
         if isinstance(reply, Exception):
             raise reply
         return reply
+
+
+class JobWaitTests(unittest.TestCase):
+    """Keep polling a run across runner waits without another run-now request."""
+
+    def test_attached_wait_does_not_launch_again(self):
+        """A queued run may later succeed while GitHub only makes GET requests."""
+        client = QueueHTTP([Response(200, json_bytes({'state': {'life_cycle_state': state,
+            'result_state': result}})) for state, result in
+            [('QUEUED', None), ('RUNNING', None), ('TERMINATED', 'SUCCESS')]])
+        self.assertEqual(wait_ledger(CLOUD, '123', client, sleeper=lambda _: None), '123')
+        self.assertEqual([call[1] for call in client.calls], ['GET', 'GET', 'GET'])
+
+    def test_wait_budget_preserves_running_run(self):
+        """Expiry reports the run ID and never cancels or relaunches Databricks."""
+        client = QueueHTTP([Response(200, json_bytes({'state': {'life_cycle_state': 'RUNNING'}}))])
+        ticks = iter([0, 0, 60])
+        with self.assertRaisesRegex(BudgetExceeded, '123'):
+            wait_ledger(CLOUD, '123', client, sleeper=lambda _: None,
+                        monotonic=lambda: next(ticks), wait_seconds=60)
+        self.assertEqual(len(client.calls), 1)
+
+    def test_nonterminal_success_field_does_not_end_wait(self):
+        """Only a terminal SUCCESS can certify a completed multi-task Job."""
+        client = QueueHTTP([Response(200, json_bytes({'state': {'life_cycle_state':'RUNNING',
+            'result_state':'SUCCESS'}})), Response(200, json_bytes({'state': {
+            'life_cycle_state':'TERMINATED','result_state':'SUCCESS'}}))])
+        self.assertEqual(wait_ledger(CLOUD, '123', client, sleeper=lambda _: None), '123')
+        self.assertEqual(len(client.calls), 2)
 
 
 def feed(features):

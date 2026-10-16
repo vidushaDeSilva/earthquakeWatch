@@ -30,6 +30,14 @@ def maintain_operation(run_id):
     engine = LifecycleEngine(lifecycle_store, run_id, dbutils.widgets.get("maintenance_fail_at"))
     if action == "none":
         return {"action": "none"}
+    if action == "auto":
+        # Only the consolidated task shares this verified Gold result.
+        if globals().get("gold_metrics", {}).get("action") != "publish":
+            return {"action": "DEFERRED_UNTIL_HEALTHY_PUBLICATION"}
+        snapshot = lifecycle_store.snapshot_daily()
+        plan = engine.plan()
+        applied = engine.apply(plan["plan_id"])
+        return {"action": "auto", **snapshot, **applied}
     if action == "snapshot":
         return lifecycle_store.snapshot_daily()
     if action == "plan":

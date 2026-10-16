@@ -141,6 +141,6 @@ class HTTPClient:
                                          datetime.now(timezone.utc))
             delay = max(requested_wait or 0, min(2 ** attempt, self.settings.max_retry_wait) + self.jitter())
             if delay > self.settings.max_retry_wait or delay >= self.deadline - self.clock():
-                raise DeferredError("Retry-After exceeds this run's wait budget; retry the collection later")
+                raise DeferredError("Retry-After exceeds this run's wait budget; retry the collection later", delay)
             self.sleep(delay)
         raise HTTPFailure(service, None)
