@@ -59,14 +59,20 @@ class CloudAPI:
             raise ConfigurationError("Expected a Databricks API-relative path")
         headers = {"Authorization": f"Bearer {self.settings.token}", "Content-Type": "application/json"}
         payload = json_bytes(body) if body is not None else None
-        if method == "GET" or path == "/api/2.2/jobs/run-now":
-            response = self.http.request("databricks", method, self.settings.host + path,
-                headers=headers, body=payload, expected=expected)
-        else:
-            response = self.sender(method, self.settings.host + path, headers, payload,
-                self.settings.timeout_seconds, self.settings.max_response_bytes)
-            if response.status not in expected:
-                raise HTTPFailure("databricks", response.status)
+        operation = method + " " + path.split("?", 1)[0]
+        try:
+            if method == "GET" or path == "/api/2.2/jobs/run-now":
+                response = self.http.request("databricks", method, self.settings.host + path,
+                    headers=headers, body=payload, expected=expected)
+            else:
+                response = self.sender(method, self.settings.host + path, headers, payload,
+                    self.settings.timeout_seconds, self.settings.max_response_bytes)
+                if response.status not in expected:
+                    raise HTTPFailure("databricks", response.status, operation)
+        except HTTPFailure as error:
+            if error.operation:
+                raise
+            raise HTTPFailure("databricks", error.status, operation) from None
         return None if response.status == 404 else (decode_json(response.body) if response.body else {})
 
     def named_jobs(self, name):

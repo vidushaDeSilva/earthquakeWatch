@@ -47,10 +47,11 @@ class HTTPFailure(PipelineError):
 
     code = "HTTP_FAILURE"
 
-    def __init__(self, service: str, status: int | None) -> None:
-        """Keep only service and status, never raw upstream exception text."""
-        self.status = status
-        super().__init__(f"{service}: HTTP {status}" if status else f"{service}: transport failed")
+    def __init__(self, service: str, status: int | None, operation: str | None = None) -> None:
+        """Keep service, status and a repository-authored operation, never provider text."""
+        self.service, self.status, self.operation = service, status, operation
+        target = f" during {operation}" if operation else ""
+        super().__init__((f"{service}: HTTP {status}" if status else f"{service}: transport failed") + target)
 
 
 class TransportFailure(Exception):

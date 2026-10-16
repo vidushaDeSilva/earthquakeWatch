@@ -1,6 +1,6 @@
 # Earthquake Impact Watchlist — project memory and implementation plan
 
-Status: implementation revision 11, 16 October 2026. Sprints1–6 cloud evidence remains as recorded below. Live Sprint7 runs exposed a40-minute GitHub wait expiry while Databricks continued. A later query showed ten pending captures and unverified tracked IDs during ongoing work. The user rejected manual recovery as routine operation and explicitly requested project-data reset code and fully automated continuation. Sections R–T, README.md and docs/AUTOMATION_V2.md now govern operation: one deployment, automatic scoped initial reset/Job setup, durable scheduled controller, consolidated task and automatic backlog/retry/publication/retention. Implementation is offline-verified; no cloud deletion, deployment or unattended acceptance of this revision has been performed.
+Status: implementation revision 12, 16 October 2026. Sprints1–6 cloud evidence remains as recorded below. Live Sprint7 runs exposed a40-minute GitHub wait expiry while Databricks continued. A later query showed ten pending captures and unverified tracked IDs during ongoing work. The user rejected manual recovery as routine operation and explicitly requested project-data reset code and fully automated continuation. Sections R–U, README.md and docs/AUTOMATION_V2.md now govern operation: one deployment, automatic scoped initial reset/Job setup, durable scheduled controller, consolidated task and automatic backlog/retry/publication/retention. Implementation is offline-verified; no cloud deletion, deployment or unattended acceptance of this revision has been performed.
 
 ## Goal and constraints
 
@@ -1369,3 +1369,20 @@ classic handoff task is rewritten without existing_cluster_id/new_cluster. Synta
 and explanatory-docstring checks pass for45 Python files. Cloud rerun remains the
 acceptance gate; the original generic error alone cannot identify which strict
 check caused the live failure.
+
+## U. Databricks HTTP operation diagnostic (16 October 2026)
+
+After revision11, the live controller reached Databricks and failed with
+HTTPFailure, but the old top-level output omitted its status and endpoint. That
+evidence establishes an API failure only; it cannot distinguish authentication,
+permission, missing resource, invalid request, quota or service failure.
+
+Revision12 carries a repository-authored operation label through HTTPFailure and
+prints all PipelineError codes/messages. Example output is `databricks: HTTP 403
+during POST /api/2.0/workspace/import`. Query strings, Job IDs, provider bodies,
+payloads and credentials are excluded. This permits the next run to identify the
+exact permission or request that needs repair without expanding sensitive logs.
+
+Verification:234 offline tests pass. The added test proves HTTP status and endpoint
+are retained while query values are absent.45 Python files pass syntax and
+explanatory-docstring checks. The next cloud run is required for diagnosis.

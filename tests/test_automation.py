@@ -15,7 +15,7 @@ from quake_pipeline.automation import Controller, reset_intent, record_bootstrap
 from quake_pipeline.automation_cloud import CloudAPI, WorkspaceJournal, inline_notebook
 from quake_pipeline.automation_reset import KafkaReset
 from quake_pipeline.contracts import json_bytes, utc_text
-from quake_pipeline.errors import ConfigurationError, ContractError, DeferredError, TransportFailure
+from quake_pipeline.errors import ConfigurationError, ContractError, DeferredError, HTTPFailure, TransportFailure
 from test_sprint_04 import NOW
 from test_sprint_05_06 import LakeStore, ROOT, event, s6, s4, s5
 
@@ -460,6 +460,18 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(task["task_key"], "automated_pipeline")
         self.assertNotIn("existing_cluster_id", task)
         self.assertNotIn("new_cluster", task)
+
+    def test_http_failure_identifies_safe_api_operation(self):
+        """Provider bodies stay hidden while status and endpoint locate the failed permission."""
+        settings = SimpleNamespace(token="secret", host="https://example.databricks.com",
+                                   timeout_seconds=1, max_response_bytes=100)
+        http = SimpleNamespace(request=lambda *args, **kwargs: (_ for _ in ()).throw(
+            HTTPFailure("databricks", 403)))
+        with self.assertRaises(HTTPFailure) as caught:
+            CloudAPI(settings, http).request("GET", "/api/2.2/jobs/get?job_id=secret-value")
+        self.assertEqual(caught.exception.status, 403)
+        self.assertEqual(caught.exception.operation, "GET /api/2.2/jobs/get")
+        self.assertNotIn("secret-value", str(caught.exception))
 
 
 class KafkaResetTests(unittest.TestCase):

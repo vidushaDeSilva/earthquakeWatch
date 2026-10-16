@@ -438,7 +438,8 @@ def main(argv=None):
         failure = {"event": "AUTOMATION_ERROR", "error_class": type(error).__name__}
         # Configuration errors are authored by this repository and contain no
         # provider body, payload or credential, so their remedy is safe to show.
-        if isinstance(error, ConfigurationError):
+        if isinstance(error, PipelineError):
+            failure["error_code"] = error.code
             failure["message"] = str(error)
         print(json_bytes(failure).decode(), flush=True)
         return 1

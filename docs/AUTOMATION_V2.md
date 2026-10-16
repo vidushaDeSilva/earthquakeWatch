@@ -270,6 +270,6 @@ data engines. Real Aiven deletion/ACLs, workspace import, Serverless consolidate
 execution, managed reset, automatic cleanup and free-tier usage still require
 the first cloud run. No production/cloud validation is claimed from mocks.
 
-Delivery verification:233 offline tests pass with no skips;45 Python files pass
+Delivery verification:234 offline tests pass with no skips;45 Python files pass
 syntax/purpose/docstrings; eight workflow YAML files parse; both assembled
 notebooks compile and contain no nested %run execution.
