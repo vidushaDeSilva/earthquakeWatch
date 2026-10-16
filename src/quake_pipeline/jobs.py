@@ -20,7 +20,7 @@ from .http import HTTPClient
 def sync_ledger(settings: Settings, job_id: int, token: str, client: HTTPClient,
                 sleeper: Callable[[float], None] = time.sleep,
                 monotonic: Callable[[], float] = time.monotonic,
-                wait_seconds: int = 600) -> str:
+                wait_seconds: int = 600, parameters: dict[str, str] | None = None) -> str:
     """Launch once per token, then poll the existing run rather than creating duplicates."""
     settings.require_cloud()
     if not 60 <= wait_seconds <= 2400:
@@ -30,7 +30,7 @@ def sync_ledger(settings: Settings, job_id: int, token: str, client: HTTPClient,
     headers = {"Authorization": f"Bearer {settings.token}", "Content-Type": "application/json"}
     response = client.request("databricks", "POST", settings.host + "/api/2.2/jobs/run-now",
                               headers=headers, body=json_bytes({"job_id": job_id,
-                              "job_parameters": {"volume_root": settings.volume_root},
+                              "job_parameters": {"volume_root": settings.volume_root, **(parameters or {})},
                               "idempotency_token": token}))
     launched = decode_json(response.body)
     if not isinstance(launched, dict) or type(launched.get("run_id")) is not int:
@@ -67,8 +67,13 @@ def main() -> int:
         token = stable_id("ledger-launch-v1", os.getenv("GITHUB_RUN_ID", uuid.uuid4().hex),
                           os.getenv("GITHUB_RUN_ATTEMPT", "1"))
         events = []
+        parameters = decode_json(os.getenv("EQ_JOB_PARAMETERS", "{}").encode())
+        allowed = {"gold_action", "reconcile_mode", "maintenance_action", "retention_plan_id", "rollback_publication_id",
+                   "rollback_expected_generation", "rollback_reason", "replay_id", "maintenance_fail_at"}
+        if not isinstance(parameters, dict) or not set(parameters) <= allowed or any(not isinstance(v, str) for v in parameters.values()):
+            raise ConfigurationError("EQ_JOB_PARAMETERS must contain only documented string Job parameters")
         run_id = sync_ledger(settings, int(raw_id), token, HTTPClient(settings, events.append),
-                             wait_seconds=wait_seconds)
+                             wait_seconds=wait_seconds, parameters=parameters)
         print(f"PASS Databricks pipeline Job: run_id={run_id}")
         return 0
     except PipelineError as error:

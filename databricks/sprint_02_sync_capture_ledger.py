@@ -2,7 +2,7 @@
 """Verify selected cloud captures and idempotently import their operations metadata.
 
 Run after the manual source-capture workflow. The source bytes remain in a managed
-Volume; this notebook writes only Sprint 1–2 Delta ledgers, not Bronze/Silver/Gold.
+Volume; this notebook writes only capture/run ledgers and recognizes verified raw retirement receipts.
 Uses explicit schemas and Spark Connect APIs supported by Serverless.
 """
 
@@ -37,47 +37,21 @@ def merge_insert(frame, table, key):
 
 
 # COMMAND ----------
-selection_schema = fields([("manifest_version", IntegerType()), ("collection_id", StringType()),
-                           ("capture_id", StringType())])
-manifest_schema = fields([(name, StringType()) for name in (
-    "collection_id", "capture_id", "source_id", "first_run_id", "response_sha256",
-    "response_relative_path", "fetched_at", "source_generated_at", "contract_version")]
-    + [("source_revision", IntegerType()), ("response_bytes", LongType()),
-       ("expected_item_count", LongType())])
+# MAGIC %run ./sprint_04_bronze_library
 
-# Fail visibly if there are no selected captures; run the GitHub capture first.
-selected = spark.read.schema(selection_schema).option("mode", "FAILFAST").json(root + "/collections/*/selected.json")
-manifests = spark.read.schema(manifest_schema).option("mode", "FAILFAST").json(root + "/captures/*/*/ready.json")
-chosen = selected.select("collection_id", "capture_id").join(manifests, ["collection_id", "capture_id"], "inner")
-if chosen.count() != selected.count():
-    raise ValueError("A selected source capture is missing its ready manifest")
-if chosen.where("contract_version != 'usgs-summary-v1' OR expected_item_count < 0").limit(1).count():
-    raise ValueError("Unexpected manifest contract")
+# COMMAND ----------
+# MAGIC %run ./sprint_05_silver_library
 
-payloads = (spark.read.format("binaryFile").load(root + "/captures/*/*/response.json")
-            .select(F.regexp_replace(F.regexp_replace("path", "^(dbfs:|file:)", ""), "^/+", "/").alias("path"),
-                    F.sha2("content", 256).alias("actual_sha256"),
-                    F.length("content").cast("long").alias("actual_bytes")))
-# The persisted relative path is bound to known IDs before any payload is accepted.
-expected_path = F.concat(F.lit("captures/"), F.col("collection_id"), F.lit("/"),
-                         F.col("capture_id"), F.lit("/response.json"))
-if chosen.where(F.col("response_relative_path") != expected_path).limit(1).count():
-    raise ValueError("Capture path does not match its identities")
-verified = chosen.join(payloads, F.concat(F.lit(root + "/"), chosen.response_relative_path) == payloads.path, "left")
-if verified.where("actual_sha256 IS NULL OR actual_sha256 != response_sha256 OR actual_bytes != response_bytes").limit(1).count():
-    raise ValueError("Source bytes failed independent Volume checksum verification")
+# COMMAND ----------
+# MAGIC %run ./sprint_06_gold_library
 
-capture_rows = verified.select(
-    "capture_id", "collection_id", "source_id", "source_revision",
-    F.col("first_run_id").alias("run_id"),
-    F.concat(F.lit(root + "/"), F.col("response_relative_path")).alias("response_uri"),
-    F.concat(F.lit(root + "/captures/"), F.col("collection_id"), F.lit("/"), F.col("capture_id"), F.lit("/ready.json")).alias("manifest_uri"),
-    "response_sha256", F.to_timestamp("fetched_at").alias("fetched_at"),
-    F.to_timestamp("source_generated_at").alias("source_generated_at"), "expected_item_count",
-    F.lit(0).cast("long").alias("accounted_item_count"),
-    F.lit(0).cast("long").alias("dispatch_chunk_count"), F.lit("CAPTURED").alias("state"),
-    F.lit(None).cast("timestamp").alias("accounted_at"))
-merge_insert(capture_rows, "ops.captures", "capture_id")
+# COMMAND ----------
+# MAGIC %run ./sprint_07_reconciliation_library
+
+# COMMAND ----------
+source_store = SparkRecoveryStore(spark, dbutils, root)
+new_capture_count = source_store.sync_captures()
+print(f"CAPTURE_LEDGER imported_new={new_capture_count}; existing states preserved")
 
 # COMMAND ----------
 attempt_schema = fields([(name, StringType()) for name in

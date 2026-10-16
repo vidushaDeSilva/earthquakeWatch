@@ -658,10 +658,23 @@ class SparkBronzeStore:
 
     def pending_captures(self):
         """Revisit all bounded captures, including receipt repair after an interrupted ack."""
-        rows = self.table("ops.captures").orderBy("fetched_at", "capture_id").limit(257).collect()
-        if len(rows) > 256:
-            raise BronzeError("Capture inventory exceeds 256; incremental recovery required")
-        return [row.asDict(recursive=True) for row in rows]
+        rows = self.table("ops.captures").orderBy("fetched_at", "capture_id").limit(10001).collect()
+        if len(rows) > 10000:
+            raise BronzeError("Capture metadata inventory exceeds 10000")
+        pending = []
+        for row in rows:
+            value = row.asDict(recursive=True)
+            receipt_raw = self.optional("receipts/captures/" + row.capture_id + ".json")
+            if row.state == "ACCOUNTED" and receipt_raw is not None:
+                receipt = bronze_decode(receipt_raw)
+                if any(receipt.get(k) != v for k, v in {"capture_id": row.capture_id,
+                        "response_sha256": row.response_sha256, "state": "ACCOUNTED",
+                        "expected_item_count": row.expected_item_count,
+                        "accounted_item_count": row.accounted_item_count}.items()):
+                    raise BronzeError("Completed capture receipt differs from its ledger")
+                continue
+            pending.append(value)
+        return pending
 
     def accounted_items(self, capture_id):
         """Count only proven accepted/rejected deliveries in Bronze-committed batches."""
@@ -705,9 +718,9 @@ class SparkBronzeStore:
         """Inventory sealed manifests independently of offsets, selecting bounded unacknowledged work."""
         if "handoff" not in self.names():
             raise BronzeError("No handoff files; run the Sprint 3 workflow first")
-        ledgers = self.table("ops.batches").limit(129).collect()
-        if len(ledgers) > 128:
-            raise BronzeError("Development ledger exceeds 128 batches; incremental inventory required")
+        ledgers = self.table("ops.batches").limit(10001).collect()
+        if len(ledgers) > 10000:
+            raise BronzeError("Development ledger exceeds 10000 batches; incremental inventory required")
         ledger = {row.batch_id: row.asDict(recursive=True) for row in ledgers}
         if len(ledger) != len(ledgers):
             raise BronzeError("Duplicate batch ledger keys")
@@ -728,8 +741,8 @@ class SparkBronzeStore:
                 if "manifest.json" not in self.names(bp):
                     continue
                 sealed.add(bid)
-                if len(sealed) > 128:
-                    raise BronzeError("Sealed batch inventory exceeds 128")
+                if len(sealed) > 10000:
+                    raise BronzeError("Sealed batch inventory exceeds 10000")
                 raw = self.read(bp + "/manifest.json")
                 manifest = bronze_decode(raw)
                 if (manifest.get("batch_id") != bid or manifest.get("stream_id") != sid
@@ -738,6 +751,18 @@ class SparkBronzeStore:
                 row = ledger.get(bid)
                 if row is None or row["manifest_sha256"] != bronze_sha(raw):
                     raise BronzeError("Run the handoff ledger before Bronze; manifest is missing or changed")
+                retirement_raw = self.optional("receipts/retired/batches/" + bid + ".json")
+                if retirement_raw is not None:
+                    retirement = bronze_decode(retirement_raw)
+                    silver_raw = self.optional("receipts/silver/" + bid + ".json")
+                    if (retirement.get("batch_id") != bid or retirement.get("state") != "RETIRED"
+                            or retirement.get("manifest_sha256") != row["manifest_sha256"]
+                            or silver_raw is None or retirement.get("silver_receipt_sha256") != bronze_sha(silver_raw)
+                            or row["data_stage"] != "SILVER_COMMITTED"):
+                        raise BronzeError("Retired landing evidence lacks matching completion proof")
+                    if recheck:
+                        raise BronzeError("Landing replay expired for this batch; use retained Bronze replay")
+                    continue
                 receipt_raw = self.optional("receipts/bronze/" + bid + ".json")
                 if receipt_raw is not None:
                     receipt = bronze_decode(receipt_raw)

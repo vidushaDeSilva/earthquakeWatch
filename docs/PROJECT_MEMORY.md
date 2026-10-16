@@ -1,6 +1,6 @@
 # Earthquake Impact Watchlist — project memory and implementation plan
 
-Status: implementation revision 7, 15 October 2026. Sprint 1–2 cloud capture and frozen retry are evidenced; Sprint 3 publication/landing and Sprint 4 main Bronze/accounting paths have user-provided cloud evidence. Full earlier fault/recheck gates remain unconfirmed. Sprint 5 and Sprint 6 implementation and offline validation are delivered; their Databricks deployment and cloud acceptance remain pending. Section O records the implementation refinements and evidence. The historical CAPTURED backlog is recorded and explicitly deferred, not repaired or ignored.
+Status: implementation revision 8, 15 October 2026. Sprint 1–4 main cloud paths are evidenced. User-provided Sprint 5 results show 24 SILVER_COMMITTED batches, 1,887 current events, 1,889 history versions and no current conflicts/withdrawals. Sprint 6 preview is BUILDING/PARTIAL; activation/failure gates remain unconfirmed. Two historical CAPTURED day responses remain in the latest screenshot. Sprints 7–8 recovery/lifecycle implementation and offline verification are delivered; their deployment, live recovery, publication, cleanup, rollback and quota gates remain pending. Section P records this delivery.
 
 ## Goal and constraints
 
@@ -1065,3 +1065,156 @@ own cell); USGS GeoJSON summary fields. Links and specific behavior appear in
 the handoff. The initial ten-sprint roadmap and retention policy remain; no
 deferred capture dispatcher, normalizer migration, retention executor, rollback
 automation, historical catalog backfill or public dashboard is implemented here.
+
+
+## P. Sprints 7–8 implementation and handoff (15 October 2026)
+
+The user finalized Sprints7/8 after reviewing the design and its plain-language
+explanation. Delivered earthquake-sprints-07-08.zip with11 NEW and10 complete
+REPLACE files under repo-update/. The overlay uses the delivered Sprint1–6
+baseline, not an inspection or merge of unseen local/remote repository edits.
+The historical capture issue is implemented for recovery, not claimed repaired.
+Latest user evidence is24 Silver batches,1887 current/1889 history, zero current
+withdrawals/conflicts, two old CAPTURED responses, and Gold BUILDING/PARTIAL.
+
+### Sprint 7 decisions and implementation
+
+- New src/quake_pipeline/reconciliation.py discovers selected frozen captures by
+  capture_id, recovers an interrupted collection selection, validates original
+  bytes, reuses chunk receipts and dispatches through the existing Kafka bridge.
+  Existing valid ACCOUNTED receipts are completion checkpoints. No silent live
+  refetch, status edit, redundancy assertion or source-time refresh closes a gap.
+- Actions recover/cycle/backfill/gap-plan/repair-gap reuse existing secrets,
+  Volume/topic/group/generation and EQ_HANDOFF_LEDGER_JOB_ID. One GitHub
+  earthquake-dev-ingestion lock and one serialized Databricks Job remain.
+- cycle drains prior frozen work, invokes a plan phase, fetches all three source
+  feeds, freezes up to64 tracked event-ID lookups, dispatches/lands bounded work
+  and invokes verify. Both Job phases force Gold preview and maintenance none.
+  A new epoch is a new observation; retrying an epoch reuses frozen evidence.
+- A single-event Feature is wrapped for the existing source contract, preserving
+  exact original bytes and a response checkpoint in the Volume. Receipt-time
+  wrapper generation is explicitly labeled, never used as source-feed freshness.
+ 404/204/409 event lookups remain unresolved; only valid source deletion evidence
+  can produce a tombstone through existing Bronze/Silver ordering checks.
+- Catalog backfill accepts1–7 complete past UTC days within the previous year.
+  Count before/after, compare returned counts and IDs, split dense/oversized
+  slices instead of paging a mutable catalog, and subtract one millisecond from
+  inclusive query ends for half-open project intervals. It cannot recreate
+  unobserved historical revisions or discover every previously unknown event
+  demoted below the magnitude filter. Known-ID checks remain separate.
+- Official API count example was directly checked: format=geojson returns a
+  {count,maxAllowed} object. The new parser handles that and plain integer text.
+  Catalog pacing is1 request/sec, maximum80 calls/invocation, eight-MiB responses,
+  existing bounded retries/jitter/Retry-After, no invented official rate quota.
+- New sprint_07_reconciliation_library and sprint_07_reconcile verify original
+  response/wrapper lineage, source captures against Silver observed versions,
+  required tracked checks within24h, gaps, pending input and open quarantine.
+  They persist ops.source_checks and ops.reconciliations. BLOCKED certification
+  is inspectable; Gold pins its issues and refuses activation. Gold additionally
+  retains the existing3h day/36h monthly freshness thresholds.
+- Historical daily corrections outside30d use covered catalog dates and pinned
+  retained Silver state, labeled BOUNDED_CATALOG_BACKFILL. Ordinary30d hourly/day
+  windows retain zero buckets and origin-time correction behavior.
+- OFFSET_GAP is explicit. gap-plan records broker bounds and selected pending
+  capture IDs; repair-gap requires that reviewed ID, verifies unchanged retention
+  boundaries, resets only that checkpoint, uses a stable replay generation, and
+  seals landed source replay. Reconciliation verifies its captures accounted.
+  Scope is selected frozen source evidence, not every historical physical Kafka
+  record. End regression/topic recreation requires separate stream-generation
+  investigation. Reset is never an automatic normal-ingestion step.
+
+### Sprint 8 decisions and implementation
+
+- New sprint_08_lifecycle_library and sprint_08_maintain implement daily release
+  preservation, exact retention plans, bounded apply/retry, isolated Bronze replay,
+  default-safe vacuum preview/apply and explicit serving rollback.
+- Seven new operations tables: ops.source_checks, ops.reconciliations,
+  ops.recovery_snapshots, ops.maintenance_plans, ops.maintenance_actions,
+  ops.data_holds and ops.rollback_actions. sprint_07_08_setup creates these and
+  required directories; updated sprint_05_06_setup adds nullable
+  ops.serving_pointer.excluded_publication_ids and updates public views.
+- Completed landing bytes:30d after verified Bronze/Silver completion. Frozen
+  source responses:90d, including related catalog original/checkpoint bytes.
+  Keep ready/selection manifests and hash-bound completion/retirement receipts.
+  Updated source/handoff/Bronze/Silver/Kafka recovery scanners distinguish
+  intentional expiry from corruption. Explicit recheck of expired landing fails;
+  use scoped retained-Bronze replay instead. Unsealed/unselected capture/landing
+  payloads can expire after7d, with single-file checks and no recursive deletion.
+- Bronze versions/deliveries:90d subject to current/recent-source holds. Resolved
+  quarantine:30d after resolution; unresolved rejection evidence remains held.
+  Silver normalized history:365d except current selected versions. Current Silver
+  rows and aliases remain compact source-order/identity watermarks; deleting them
+  by age could resurrect an old revision, so the initial one-year current-row
+  proposal is deliberately refined. No unsafe watermark deletion is implemented.
+- Runs/attempts:1y where dependency-free. Compact capture/batch metadata and
+  activation audits remain held for identity, proof and retained release lineage.
+  Unresolved request incidents retain their evidence. These are explicit holds,
+  not a promise of complete physical deletion of every byte on an age boundary.
+- Protect current/previous public releases; recent candidates7d; newest designated
+  daily release/day and latest published daily revisions up to2y. Snapshot manifests
+  record policy/source/input pins, table versions and exact output hashes. This is
+  workspace protection against pipeline mistakes, not an independent account backup.
+- Plan then apply: fixed manifest hash, exact paths/keys/content/counts, at most32
+  actions and1000 table keys/action,24h expiry, immediate dependency/content
+  revalidation, intention-before-mutation audit and readback. Pending captures,
+  pending Silver batches, open quarantine or an active data hold block cleanup.
+  Retired receipts are written before raw deletion. An uncertain deletion reply
+  resolves using its saved intent and expected postcondition. Publication output
+  is marked EXPIRED before pruning; retry cannot silently rebuild an expired ID.
+- Rollback verifies all three retained Gold output hashes, expected serving
+  generation and reason. One pointer-table CAS changes target and excludes the
+  replaced bad release in the same transaction. Public daily history respects
+  exclusions. Readback/audit repairs a lost acknowledgement; a superseded rollback
+  cannot overwrite newer serving. Freshness still uses original source/as-of times.
+- Replay builds earthquake_dev.replay_<id>.event_versions/events_current from
+  retained validated raw + alias + delivery/capture observation evidence. It
+  rejects conflicts, preserves live serving and is idempotent for identical input.
+  Changed retained input needs a new replay ID. It is not a whole-year rebuild
+  guarantee; inspect the isolated results before any deliberate live repair.
+- Keep Delta deleted-file retention7d/log retention30d and safety checks enabled.
+  Inspect exact vacuum candidates; old unfinished publication pins must expire.
+  No zero-hour vacuum, managed-table file deletion, missing-file ignore or
+  automatic cross-table RESTORE is introduced. RESTORE runbook requires retained
+  log+files, recorded versions and subsequent reconciliation; a restore is itself
+  a new table change. Gold snapshot rows survive independently of old Silver pins.
+
+### Integration and acceptance
+
+Keep the same Job ID/max concurrent runs1. Seven serial tasks are capture ledger,
+ handoff ledger, Bronze, Silver, reconcile_sources, Gold and maintain. Import all
+new/replacement notebooks as source into the existing sibling folder with each
+%run in its own cell. Run sprint_07_08_setup, then updated sprint_05_06_setup.
+Add reconcile_mode=verify, maintenance_action=none and blank maintenance IDs/
+reason/replay ID, expected rollback generation0 and maintenance_fail_at=none.
+Keep normal Bronze/Silver fault/recheck defaults and Gold preview initially.
+
+Delivery guide and all exact repository/configuration/deployment/recovery steps
+are docs/SPRINT_07_08_HANDOFF.md. New workflows reconcile-recover.yml and
+lifecycle.yml are manual. No scheduled production operation is claimed; Sprint9
+owns measured unattended scheduling/quota validation. Development bounds stop
+visibly at10000 metadata items/current events,20000 aliases/replay versions,
+100000 selected inventory rows,366 historic dates and bounded per-pass work.
+Sustained indexing/paging must be measured before those limits are reached.
+
+195 offline tests pass:141 previous plus54 new, no pinned Kafka client tests
+skipped. Syntax/explanatory docstrings pass for38 Python files. Local PySpark3.5.3
+accepts25 project schemas including seven new tables/pointer migration shape;
+four public/health views and18 acceptance queries analyze/execute against
+synthetic empty views with namespace translation. Five constant integration SQL
+statements parse in Databricks dialect; all workflow YAML parses. Local tooling
+added no new project runtime dependencies. These checks do not execute managed
+Delta transactions, Unity Catalog/Volume retirement, Aiven recovery or Serverless.
+
+Cloud gates remain: two captures accounted with original evidence; repeated
+recovery without duplicate business versions; fresh feed/tracked checks; clean
+preview then READY activation; historical slice; reviewed deletion/dry-run and
+interruption recovery; retained snapshot/pointer rollback/audit; scoped Bronze
+replay comparison; measured free-tier runtime/storage. No cloud recovery, deletion,
+rollback or deployment was performed by the assistant for this delivery.
+
+Primary documentation checked: USGS FDSN query/count/event-ID/deleted behavior,
+Databricks Jobs run-now/job_parameters/idempotency tokens, table history/RESTORE,
+managed vacuum/default retention and notebook cell requirements. Links and
+specific verified behavior are recorded in the handoff. User coding conventions
+remain mandatory: file purpose, docstrings, essential comments, complete new/
+replacement files and exact deployment instructions in the chat and package.

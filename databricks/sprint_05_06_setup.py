@@ -17,6 +17,8 @@ Existing Bronze tables, frozen responses and operational evidence are preserved.
 # COMMAND ----------
 if "GOLD_SCHEMAS" not in globals():
     raise RuntimeError("Import as a source notebook with separate %run cells, then Run all")
+if spark.catalog.tableExists("earthquake_dev.ops.serving_pointer") and "excluded_publication_ids" not in spark.table("earthquake_dev.ops.serving_pointer").columns:
+    spark.sql("ALTER TABLE earthquake_dev.ops.serving_pointer ADD COLUMNS (excluded_publication_ids ARRAY<STRING>)")
 for name, columns in {**SILVER_SCHEMAS, **GOLD_SCHEMAS}.items():
     spark.sql(f"""CREATE TABLE IF NOT EXISTS earthquake_dev.{name} ({columns}) USING DELTA
         TBLPROPERTIES ('delta.deletedFileRetentionDuration'='interval 7 days',
@@ -29,7 +31,8 @@ for name, columns in {**SILVER_SCHEMAS, **GOLD_SCHEMAS}.items():
 spark.sql("""MERGE INTO earthquake_dev.ops.serving_pointer t USING
     (SELECT 'earthquake_watchlist' product_key, CAST(NULL AS STRING) publication_id,
         CAST(NULL AS STRING) previous_publication_id, CAST(0 AS BIGINT) pointer_generation,
-        CAST(NULL AS TIMESTAMP) updated_at, CAST(NULL AS STRING) run_id) s
+        CAST(NULL AS TIMESTAMP) updated_at, CAST(NULL AS STRING) run_id,
+        CAST(array() AS ARRAY<STRING>) excluded_publication_ids) s
     ON t.product_key=s.product_key WHEN NOT MATCHED THEN INSERT *""")
 
 spark.sql("""CREATE OR REPLACE VIEW earthquake_dev.ops.v_pipeline_health AS
@@ -80,8 +83,11 @@ spark.sql("""CREATE OR REPLACE VIEW earthquake_dev.gold.v_daily_history AS
       SELECT d.*, row_number() OVER(PARTITION BY d.event_date ORDER BY d.as_of_utc DESC,d.publication_id DESC) revision_rank
       FROM earthquake_dev.gold.daily_history d JOIN earthquake_dev.ops.publications u
         ON d.publication_id=u.publication_id AND u.state='READY'
+      CROSS JOIN earthquake_dev.ops.serving_pointer pointer
       JOIN (SELECT DISTINCT scope_id FROM earthquake_dev.ops.stage_attempts
         WHERE stage_name='PUBLISH_POINTER' AND status='SUCCESS') activated ON activated.scope_id=d.publication_id
+      WHERE pointer.product_key='earthquake_watchlist'
+        AND NOT array_contains(coalesce(pointer.excluded_publication_ids,CAST(array() AS ARRAY<STRING>)),d.publication_id)
     ) WHERE revision_rank=1""")
 print("PASS Sprint 5/6 table and view setup; serving pointer preserved")
 

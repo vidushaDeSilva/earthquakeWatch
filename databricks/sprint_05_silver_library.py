@@ -374,13 +374,16 @@ class SparkSilverStore(SparkBronzeStore):
 
     def silver_batches(self, recheck=False, maximum=32):
         """Include missing-receipt repairs even after the ledger advanced to Silver."""
-        all_batches = self.rows("ops.batches", 128)
+        all_batches = self.rows("ops.batches", 10000)
         pending = []
         for batch in sorted(all_batches, key=lambda b: (b["landed_at"], b["batch_id"])):
             if batch["data_stage"] == "LANDED":
                 raise SilverError("Run Bronze before Silver; LANDED batches remain")
             if batch["data_stage"] not in ("BRONZE_COMMITTED", "SILVER_COMMITTED"):
                 raise SilverError("Unknown input data stage")
+            retired = self.optional("receipts/retired/batches/" + batch["batch_id"] + ".json")
+            if retired is not None and recheck:
+                raise SilverError("Landing recheck expired; use Bronze replay into a recovery namespace")
             raw = self.optional("receipts/silver/" + batch["batch_id"] + ".json")
             if raw is not None:
                 receipt = bronze_decode(raw)

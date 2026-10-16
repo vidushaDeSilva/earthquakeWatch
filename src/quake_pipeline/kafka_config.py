@@ -27,7 +27,7 @@ class KafkaSettings:
     max_source_items: int = 10000
     max_message_bytes: int = 262144
     max_batch_bytes: int = 4194304
-    max_batches: int = 128
+    max_batches: int = 10000
     max_land_records: int = 10000
 
     @classmethod

@@ -38,7 +38,7 @@ GOLD_SCHEMAS = {
         state STRING NOT NULL, created_at TIMESTAMP NOT NULL, ready_at TIMESTAMP, is_daily_snapshot BOOLEAN NOT NULL,
         output_table_versions MAP<STRING,BIGINT> NOT NULL, output_hashes MAP<STRING,STRING> NOT NULL""",
     "ops.serving_pointer": """product_key STRING NOT NULL, publication_id STRING,
-        previous_publication_id STRING, pointer_generation BIGINT NOT NULL, updated_at TIMESTAMP, run_id STRING""",
+        previous_publication_id STRING, pointer_generation BIGINT NOT NULL, updated_at TIMESTAMP, run_id STRING, excluded_publication_ids ARRAY<STRING>""",
 }
 GOLD_KEYS = {"gold.watchlist_snapshots": ("publication_id", "event_key"),
     "gold.window_snapshots": ("publication_id", "window_grain", "window_start"),
@@ -93,7 +93,7 @@ def gold_reasons(event, thresholds):
 
 def gold_coverage(captures, batches, rejections, as_of):
     """Freeze honest feed coverage using fetch/generation evidence rather than newest event time."""
-    issues, summaries, fetched = [], [], []
+    issues, summaries, fetched = list(rejections.get("reconciliation_issues", [])), [], []
     if any(c["state"] != "ACCOUNTED" for c in captures):
         issues.append("PENDING_CAPTURES")
     if any(b["data_stage"] != "SILVER_COMMITTED" for b in batches):
@@ -121,7 +121,8 @@ def gold_coverage(captures, batches, rejections, as_of):
             "source_generated_at": generated, "expected_item_count": latest["expected_item_count"],
             "accounted_item_count": latest["accounted_item_count"]})
     snapshot = {"sources": summaries, "pending_capture_ids": sorted(c["capture_id"] for c in captures if c["state"] != "ACCOUNTED"),
-        "scope": "M2.5+ and significant rolling feeds; targeted event-ID checks deferred to Sprint 7"}
+        "historical_dates": rejections.get("historical_dates", []),
+        "scope": "M2.5+ and significant rolling feeds; bounded targeted checks when reconciliation evidence exists"}
     return sorted(set(issues)), snapshot, min(fetched) if len(fetched) == 3 else None
 
 
@@ -180,6 +181,24 @@ def gold_outputs(events, publication, thresholds):
             current += step
     if any(sum(w["event_count"] for w in windows if w["window_grain"] == grain) != len(scoped) for grain in ("HOUR", "DAY")):
         raise GoldError("Window counts do not reconcile with pinned events")
+    historic = bronze_decode(publication["source_checks_json"].encode()).get("historical_dates", [])
+    if len(historic) > 366:
+        raise GoldError("Historical daily revision scope exceeds 366 dates")
+    for text in sorted(set(historic)):
+        day = datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
+        if start.date() <= day.date() <= as_of.date():
+            continue  # Existing 30-day rows already cover these dates, including clipped boundaries.
+        if day >= as_of:
+            raise GoldError("Historical correction cannot include a future day")
+        data = [e for e in events if not e["is_deleted"] and e["event_type"] == "earthquake"
+                and e["event_time"] is not None and day <= e["event_time"] < day + timedelta(days=1)]
+        mags = [e["magnitude"] for e in data if e["magnitude"] is not None]
+        daily.append({"event_date": day.date(), "publication_id": pid, "policy_version": publication["policy_version"],
+            "event_count": len(data), "watchlist_count": sum(bool(gold_reasons(e, thresholds)[0]) for e in data),
+            "max_magnitude": max(mags) if mags else None, "pager_yellow_count": sum(e["pager_alert"] == "yellow" for e in data),
+            "pager_orange_count": sum(e["pager_alert"] == "orange" for e in data),
+            "pager_red_count": sum(e["pager_alert"] == "red" for e in data), "as_of_utc": as_of,
+            "coverage_status": "BOUNDED_CATALOG_BACKFILL", "is_partial": False})
     return {"gold.watchlist_snapshots": watchlist, "gold.window_snapshots": windows, "gold.daily_history": daily}
 
 
@@ -199,6 +218,8 @@ class GoldEngine:
         existing = self.store.publication(retry_id) if retry_id else None
         if retry_id and existing is None:
             raise GoldError("Unknown retry publication")
+        if existing and existing["state"] == "EXPIRED":
+            raise GoldError("Publication output retention expired; build a new candidate")
         if existing:
             policy_version = existing["policy_version"]
         policies = self.store.lookup("ref.impact_policies", "policy_version", [policy_version])
@@ -288,13 +309,25 @@ class SparkGoldStore(SparkSilverStore):
 
     def coverage_inputs(self):
         """Inventory bounded capture/batch coverage and unresolved Silver quarantine."""
-        captures, batches = self.rows("ops.captures", 256), self.rows("ops.batches", 128)
+        captures, batches = self.rows("ops.captures", 10000), self.rows("ops.batches", 10000)
         open_stages = {r["stage_name"] for r in self.table("bronze.quarantine")
                        .where("resolution_status='OPEN'").select("stage_name").distinct().limit(3).collect()}
         rejects = {"silver": "SILVER" in open_stages, "bronze": "BRONZE" in open_stages}
         for batch in batches:
             if batch["data_stage"] == "SILVER_COMMITTED" and self.optional("receipts/silver/" + batch["batch_id"] + ".json") is None:
                 raise GoldError("Missing Silver completion receipt; run Silver recovery")
+        if self.spark.catalog.tableExists("earthquake_dev.ops.reconciliations"):
+            reports = self.spark.table("earthquake_dev.ops.reconciliations").orderBy("checked_at", ascending=False).limit(1).collect()
+            if not reports:
+                rejects["reconciliation_issues"] = ["MISSING_RECONCILIATION"]
+            else:
+                report = s56_utc(reports[0].asDict(recursive=True))
+                rejects["reconciliation_issues"] = list(report["issues"])
+                if self.now() - report["checked_at"] > timedelta(hours=3):
+                    rejects["reconciliation_issues"].append("STALE_RECONCILIATION")
+                if report["silver_table_version"] != self.table_version("silver.events_current"):
+                    rejects["reconciliation_issues"].append("RECONCILIATION_SILVER_CHANGED")
+                rejects["historical_dates"] = report["historical_dates"]
         return captures, batches, rejects
 
     def publication(self, publication_id):
@@ -336,6 +369,8 @@ class SparkGoldStore(SparkSilverStore):
     def activation_gate(self, publication):
         """Recheck live coverage and age before exposing an otherwise immutable release."""
         pointer = self.pointer()
+        if publication["publication_id"] in (pointer.get("excluded_publication_ids") or []):
+            raise GoldError("Publication was excluded by rollback; build a repaired release")
         if pointer["publication_id"] == publication["publication_id"] and publication["state"] == "READY":
             return
         if publication["blocking_issues"]:
@@ -377,7 +412,8 @@ class SparkGoldStore(SparkSilverStore):
             return
         row = {"product_key": "earthquake_watchlist", "publication_id": publication["publication_id"],
             "previous_publication_id": previous["publication_id"], "pointer_generation": previous["pointer_generation"] + 1,
-            "updated_at": self.now(), "run_id": run_id}
+            "updated_at": self.now(), "run_id": run_id,
+            "excluded_publication_ids": previous.get("excluded_publication_ids") or []}
         self.frame("ops.serving_pointer", [row]).createOrReplaceTempView("s6_pointer")
         try:
             self.spark.sql("""MERGE INTO earthquake_dev.ops.serving_pointer t USING s6_pointer s ON t.product_key=s.product_key

@@ -19,7 +19,7 @@ root = dbutils.widgets.get("volume_root").rstrip("/")
 if root != "/Volumes/earthquake_dev/ops/landing":
     raise ValueError("Sprint 3 ledger sync requires the development Volume")
 spark.conf.set("spark.sql.session.timeZone", "UTC")
-MAX_BATCHES = 128
+MAX_BATCHES = 10000
 
 
 def sha(payload):
@@ -115,7 +115,7 @@ for stream_entry in children(root + "/handoff"):
         for batch_entry in children(prefix + "/batches"):
             bid = hex_directory(batch_entry)
             if len(batch_rows) >= MAX_BATCHES:
-                raise ValueError("Bounded ledger scan exceeds 128 batches; review backlog before continuing")
+                raise ValueError("Bounded ledger scan exceeds 10000 batches; review backlog before continuing")
             batch_prefix = prefix + "/batches/" + bid
             files = {child_name(entry) for entry in children(batch_prefix)}
             if "manifest.json" not in files:
@@ -127,6 +127,19 @@ for stream_entry in children(root + "/handoff"):
                 "manifest_version": 1, "stream_id": sid, "stream_generation": generation,
                 "topic": topic, "batch_id": bid, "state": "LANDED", "records_relative_path": relative}.items()):
                 raise ValueError("Manifest identity/path differs")
+            retirement_path = root + "/receipts/retired/batches/" + bid + ".json"
+            retired_folder = root + "/receipts/retired/batches"
+            retired_names = {child_name(e) for e in children(retired_folder)}
+            if bid + ".json" in retired_names:
+                retirement = json.loads(read_bytes(retirement_path))
+                known = spark.table("earthquake_dev.ops.batches").where(F.col("batch_id") == bid).collect()
+                silver_receipt = read_bytes(root + "/receipts/silver/" + bid + ".json")
+                if (len(known) != 1 or known[0].data_stage != "SILVER_COMMITTED"
+                        or retirement.get("manifest_sha256") != sha(raw_manifest)
+                        or retirement.get("silver_receipt_sha256") != sha(silver_receipt)
+                        or retirement.get("batch_id") != bid or retirement.get("state") != "RETIRED"):
+                    raise ValueError("Retired batch lacks matching durable completion proof")
+                continue  # Keep its manifest and Delta ledger; raw landing expiry is intentional.
             data = read_bytes(root + "/" + relative)
             items = [json.loads(line) for line in data.splitlines()]
             if (not items or len(items) != m["row_count"] or len(data) != m["data_bytes"]

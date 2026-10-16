@@ -163,11 +163,25 @@ def recover(volume: Volume, kafka: Any, settings: KafkaSettings,
     identity = stream_id(settings)
     batch_ids = volume.child_directories(f"handoff/{identity}/batches")
     if len(batch_ids) > settings.max_batches:
-        raise BudgetExceeded("Recovery inventory exceeds 128 batches; bounded paging/retention gate required")
+        raise BudgetExceeded("Recovery inventory exceeds 10000 batches; bounded paging/retention gate required")
     complete, incomplete = [], 0
     for batch_id in batch_ids:
         if volume.read_optional(f"handoff/{identity}/batches/{batch_id}/manifest.json") is None:
             incomplete += 1
+            continue
+        retired = volume.read_optional(f"receipts/retired/batches/{batch_id}.json")
+        if retired is not None:
+            proof = decode_json(retired)
+            raw = volume.read_optional(f"handoff/{identity}/batches/{batch_id}/manifest.json")
+            silver = volume.read_optional(f"receipts/silver/{batch_id}.json")
+            if (proof.get("batch_id") != batch_id or proof.get("state") != "RETIRED" or raw is None
+                    or proof.get("manifest_sha256") != digest(raw) or silver is None
+                    or proof.get("silver_receipt_sha256") != digest(silver)):
+                raise ContractError("Retired landing batch lacks matching completion receipts")
+            manifest = decode_json(raw)
+            committed = kafka.bounds(manifest["partition"])[2]
+            if committed is None or committed < manifest["next_offset"]:
+                raise ContractError("Kafka checkpoint regressed behind an expired landing batch")
             continue
         manifest, stored = verify_batch(volume, settings, batch_id)
         complete.append(manifest)
