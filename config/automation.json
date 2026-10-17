@@ -1,5 +1,0 @@
-{
-  "_description": "One-time project-only clean reset on first deployment; the cloud journal prevents repetition. Changing this ID requests another destructive reset.",
-  "initial_reset_id": "clean-20261016",
-  "initial_reset_confirmation": "RESET_EARTHQUAKE_DEV"
-}
