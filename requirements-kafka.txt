@@ -1,2 +1,0 @@
-# Purpose: install the tested Kafka client for Sprint 3 cloud handoff only.
-kafka-python==2.3.2
