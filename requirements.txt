@@ -1,2 +1,0 @@
-# Purpose: provide the single supported runtime dependency entry point.
--r requirements-kafka.txt
