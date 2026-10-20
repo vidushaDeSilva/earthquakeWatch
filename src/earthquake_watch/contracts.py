@@ -13,17 +13,20 @@ class ContractError(ValueError):
 
 
 def utc(dt: datetime) -> datetime:
+    """Require timezone-aware input and normalize it to UTC."""
     if dt.tzinfo is None:
         raise ContractError("UTC-aware time required")
     return dt.astimezone(timezone.utc)
 
 
 def stamp(dt: datetime) -> str:
+    """Render a stable millisecond-resolution UTC timestamp."""
     return utc(dt).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 @dataclass(frozen=True)
 class SourceConfig:
+    """Immutable identity and safety bounds for the USGS all-day feed."""
     source_id: str
     source_url: str
     max_response_bytes: int
@@ -32,6 +35,7 @@ class SourceConfig:
 
     @classmethod
     def load(cls, path: Path) -> "SourceConfig":
+        """Load the exact versioned USGS source configuration."""
         data = json.loads(path.read_text(encoding="utf-8"))
         expected = {"schema_version", "source_id", "source_url", "max_response_bytes", "socket_timeout_seconds", "max_future_seconds"}
         if set(data) != expected or type(data["schema_version"]) is not int or data["schema_version"] != 1:
@@ -46,6 +50,7 @@ class SourceConfig:
 
 @dataclass(frozen=True)
 class ValidatedFeed:
+    """Evidence measured directly from the unmodified source response."""
     sha256: str
     size: int
     count: int
@@ -77,6 +82,7 @@ def validate_feed(raw: bytes, cfg: SourceConfig, now: datetime) -> ValidatedFeed
 
 
 def capture_id(source_id: str, scheduled_time: datetime, checksum: str) -> tuple[str, datetime]:
+    """Bind a response checksum to the UTC hourly schedule slot."""
     slot = utc(scheduled_time).replace(minute=0, second=0, microsecond=0)
     if len(checksum) != 64 or any(c not in "0123456789abcdef" for c in checksum):
         raise ContractError("Invalid response checksum")
@@ -85,4 +91,5 @@ def capture_id(source_id: str, scheduled_time: datetime, checksum: str) -> tuple
 
 
 def json_bytes(value: dict[str, Any]) -> bytes:
+    """Serialize a small manifest or envelope as deterministic UTF-8 JSON."""
     return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
