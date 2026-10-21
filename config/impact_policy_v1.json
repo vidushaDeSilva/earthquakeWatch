@@ -1,5 +1,16 @@
 {
   "schema_version": 1,
   "policy_version": "impact-v1",
-  "status": "reserved-for-phase-4"
+  "product_key": "usgs-watchlist",
+  "window_hours": 24,
+  "max_source_age_minutes": 180,
+  "rules": [
+    {"code": "PAGER_RED", "field": "pager_alert", "equals": "red", "priority": 0},
+    {"code": "PAGER_ORANGE", "field": "pager_alert", "equals": "orange", "priority": 1},
+    {"code": "PAGER_YELLOW", "field": "pager_alert", "equals": "yellow", "priority": 2},
+    {"code": "TSUNAMI_FLAG", "field": "tsunami_flag", "equals": true, "priority": 3},
+    {"code": "SHAKEMAP_MMI_GTE_6", "field": "max_mmi", "gte": 6, "priority": 4},
+    {"code": "MAG_GTE_6", "field": "magnitude", "gte": 6, "priority": 5},
+    {"code": "SIG_GT_600", "field": "significance", "gt": 600, "priority": 6}
+  ]
 }
