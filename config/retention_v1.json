@@ -1,4 +1,11 @@
 {
   "schema_version": 1,
-  "status": "reserved-for-phase-6; no automatic deletion in phase-0-or-1"
+  "status": "dry-run-default",
+  "incomplete_days": 7,
+  "completed_files_days": 30,
+  "receipts_days": 90,
+  "bronze_days": 90,
+  "silver_days": 365,
+  "gold_days": 365,
+  "ops_min_days": 365
 }

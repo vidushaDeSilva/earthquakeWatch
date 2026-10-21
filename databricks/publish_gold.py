@@ -20,6 +20,14 @@ CATALOG = "earthquake_dev"
 PRODUCT = "usgs-watchlist"
 
 
+def _utc_datetime(value: datetime) -> datetime:
+    """Interpret Spark's timezone-naive timestamps as UTC consistently."""
+    if not isinstance(value, datetime):
+        raise ContractError("Expected a publication timestamp")
+    return (value.replace(tzinfo=timezone.utc) if value.tzinfo is None
+            else value.astimezone(timezone.utc))
+
+
 def _table(suffix: str) -> str:
     """Resolve reviewed development tables without arbitrary SQL identifiers."""
     return f"{CATALOG}.{suffix}"
@@ -142,7 +150,7 @@ def _pointer(spark: Any, publication_id: str, run_id: str, as_of: datetime) -> i
         if len(active) != 1 or active[0]["publication_status"] not in ("READY", "ACTIVE"):
             raise ContractError("Existing serving pointer is invalid")
         # An older retry is never allowed to supersede a newer release.
-        if active[0]["created_at"] >= as_of:
+        if _utc_datetime(active[0]["created_at"]) >= _utc_datetime(as_of):
             raise ContractError("Candidate is not newer than the active publication")
     generation = old["pointer_generation"] + 1 if old else 1
     now = datetime.now(timezone.utc)
@@ -184,7 +192,7 @@ def publish(spark: Any, batch_id: str, pipeline_run_id: str, revision: str,
             or parent[0]["processing_revision"] != revision or parent[0]["batch_ids"] != [batch_id]
             or parent[0]["submitted_at"] is None):
         raise ContractError("Gold needs one RUNNING parent for exactly this batch and revision")
-    as_of = parent[0]["submitted_at"].replace(tzinfo=timezone.utc)
+    as_of = _utc_datetime(parent[0]["submitted_at"])
     stages = _rows(spark, _table("ops.stage_runs"), F.col("pipeline_run_id") == pipeline_run_id)
     committed = [s for s in stages if s["stage_name"] == "SILVER" and s["stage_status"] == "COMMITTED"]
     if len(committed) != 1 or committed[0]["output_delta_version"] is None:
@@ -244,7 +252,7 @@ def publish(spark: Any, batch_id: str, pipeline_run_id: str, revision: str,
                  .select(F.explode("capture_ids").alias("capture_id")), "capture_id")
         generated = [r[0] for r in captures.select("source_generated_at").collect()]
         _check(spark, pipeline_run_id, publication_id, "capture_freshness",
-               bool(generated) and all(g is not None and 0 <= (as_of - g.replace(tzinfo=timezone.utc)).total_seconds() <= 10800
+               bool(generated) and all(g is not None and 0 <= (as_of - _utc_datetime(g)).total_seconds() <= 10800
                                        for g in generated), str(len(generated)), "all captures generated within 3h")
         landing = _rows(spark, _table("ops.landing_batches"), F.col("landing_batch_id") == batch_id)
         _check(spark, pipeline_run_id, publication_id, "landing_complete",
@@ -286,7 +294,7 @@ def publish(spark: Any, batch_id: str, pipeline_run_id: str, revision: str,
         events = [r.asDict(recursive=True) for r in frame.collect()]
         for event in events:
             # Spark returns UTC timestamps as naive Python datetime objects.
-            event["event_time"] = event["event_time"].replace(tzinfo=timezone.utc)
+            event["event_time"] = _utc_datetime(event["event_time"])
         conflicts = sum(bool(r["version_conflict"]) for r in events)
         _check(spark, pipeline_run_id, publication_id, "version_conflict", conflicts == 0, str(conflicts), "0")
         watchlist, daily = build_rows(events, publication_id, as_of, policy)

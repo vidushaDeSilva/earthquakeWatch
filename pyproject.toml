@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "earthquake-watch"
-version = "0.1.0"
+version = "0.2.0"
 description = "Earthquake Watch capture and bootstrap contracts"
 requires-python = ">=3.11"
 dependencies = []

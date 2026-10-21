@@ -7,6 +7,7 @@ import pytest
 
 from earthquake_watch.contracts import ContractError
 from earthquake_watch.gold_policy import build_rows, load_policy, reasons
+import importlib.util
 
 
 POLICY_PATH = Path(__file__).resolve().parents[1] / "config" / "impact_policy_v1.json"
@@ -26,6 +27,18 @@ def event(event_id: str, occurred: datetime, **overrides):
 def policy():
     """Read the versioned policy file tested in the deployment."""
     return load_policy(POLICY_PATH.read_bytes())[0]
+
+
+def test_databricks_timestamp_normalization_handles_spark_naive_utc():
+    """Spark UTC-naive and Python aware timestamps compare without TypeError."""
+    path = Path(__file__).resolve().parents[1] / "databricks" / "publish_gold.py"
+    spec = importlib.util.spec_from_file_location("publish_gold", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    naive = datetime(2026, 10, 21, 12, 0)
+    aware = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
+    assert module._utc_datetime(naive) == aware
+    assert module._utc_datetime(aware) == aware
 
 
 def test_policy_checksum_and_all_rules():
