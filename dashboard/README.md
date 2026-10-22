@@ -5,6 +5,12 @@ Read-only Streamlit dashboard for the Phase 5–6 Earthquake Watch repo. Copy th
 root of your current `earthquake-watch-v1` repository. The pipeline code and
 Jobs are not changed.
 
+The app has three pages: Overview, Pipeline runs, and Earthquake results. It
+reads the source URL and exact watchlist thresholds from the repository's
+`config/source_usgs_all_day.json` and `config/impact_policy_v1.json`, so keep
+those files beside the dashboard when deploying. Maintenance is operated
+separately from the dashboard.
+
 ## Deploy the data contract
 
 In the Databricks SQL editor, confirm that `earthquake_dev` contains the Phase
@@ -43,7 +49,9 @@ streamlit run app.py
 
 Set the following environment variables, or copy
 `dashboard/.streamlit/secrets.toml.example` to
-`dashboard/.streamlit/secrets.toml` and replace the placeholders:
+`dashboard/.streamlit/secrets.toml` and replace the placeholders. If you run
+Streamlit from the repository root instead, place the file at
+`.streamlit/secrets.toml` at the repository root:
 
 - `DATABRICKS_HOST`: HTTPS workspace root URL.
 - `DATABRICKS_HTTP_PATH`: SQL warehouse HTTP path from Connection details.
@@ -67,8 +75,8 @@ secrets in the example file or in GitHub Actions logs.
 - The dashboard has no GitHub event source, so it cannot certify that seven
   consecutive runs were triggered by `schedule`. Keep the GitHub acceptance
   log separately until the trigger is captured in a governed table.
-- Maintenance plans currently live as Volume files rather than a queryable
-  ledger. The page states this limitation; it does not fabricate an outcome.
+- The watchlist uses the reviewed `impact-v1` policy: current earthquakes in
+  the rolling 24-hour publication window that match any displayed impact rule.
 
 Reconcile the dashboard against the two known successful runs: the second run
 `4cd551fcaeafab11aaeced35b314febfdceedd6fc6a660bfd05c719c44c31399`

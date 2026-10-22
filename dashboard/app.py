@@ -12,6 +12,7 @@ import streamlit as st
 # Streamlit runs this script by path; make the repository root importable.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dashboard import queries  # noqa: E402
+from dashboard.content import load_context, watchlist_explanation  # noqa: E402
 from dashboard.data import fetch_rows  # noqa: E402
 from dashboard.metrics import (as_utc, duration_minutes, landing_coverage,
                                summarize)  # noqa: E402
@@ -155,6 +156,17 @@ def pipeline(runs: list[dict], batches: list[dict], captures: list[dict]) -> Non
 def results(daily: list[dict], watchlist: list[dict]) -> None:
     """Display only pointer-gated, validated Gold results."""
     st.subheader("Published earthquake results")
+    try:
+        _, policy = load_context()
+        scope, rules = watchlist_explanation(policy)
+        st.markdown(f"**What counts as a watchlist earthquake?** {scope}")
+        st.markdown("\n".join(f"- {rule}" for rule in rules))
+        st.caption("PAGER red, orange, or yellow gives the label 'estimated impact'; "
+                   "the other signals alone give 'potential impact'. These are "
+                   "prioritization labels, not a confirmation of damage or an alert.")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        st.error(f"Could not load the impact policy explanation: {type(exc).__name__}. "
+                 "Check config/impact_policy_v1.json in this repository.")
     if daily:
         publication_ids = {r["publication_id"] for r in daily}
         st.caption(f"Active publication: {', '.join(sorted(publication_ids))} · "
@@ -192,18 +204,50 @@ def results(daily: list[dict], watchlist: list[dict]) -> None:
 
 
 def main() -> None:
-    """Load one bounded snapshot and expose four read-only dashboard pages."""
+    """Load one bounded snapshot and expose three read-only dashboard pages."""
     st.title("Earthquake Watch")
-    st.caption("USGS → Kafka → Databricks · read-only operational and published data")
+    try:
+        source, _ = load_context()
+        st.markdown("Earthquake Watch polls the [USGS all-day GeoJSON feed]"
+                    f"({source['source_url']}) each hour. Each source record describes "
+                    "an earthquake's origin time, location, magnitude, depth and "
+                    "available impact signals. The pipeline transports deliveries "
+                    "through Kafka, resolves current event versions in Databricks, "
+                    "and publishes a validated rolling 24-hour summary.")
+    except (OSError, ValueError, KeyError, TypeError):
+        st.warning("Source description unavailable. Check config/source_usgs_all_day.json.")
     if st.sidebar.button("Refresh data"):
         load.clear()
         snapshot.clear()
         st.rerun()
-    page = st.sidebar.radio("View", ["Overview", "Pipeline runs", "Earthquake results", "Maintenance"])
+    page = st.sidebar.radio("View", ["Overview", "Pipeline runs", "Earthquake results"])
     try:
         data = snapshot()
-    except Exception:
-        st.error("Dashboard data is unavailable. Verify SQL warehouse access, secrets, and dashboard views.")
+    except Exception as exc:
+        # Show only a sanitized diagnostic. Connector errors can contain SQL
+        # text, but must never expose token values or connection credentials.
+        message = str(exc)
+        for secret_name in ("DATABRICKS_TOKEN", "AIVEN_KAFKA_PASSWORD", "AIVEN_KAFKA_CA_PEM"):
+            try:
+                from dashboard.data import _setting
+                secret = _setting(secret_name)
+                if secret:
+                    message = message.replace(secret, "[redacted]")
+            except Exception:
+                pass
+        st.error("Dashboard data is unavailable.")
+        st.code(f"{type(exc).__name__}: {message}")
+        st.markdown("""
+**Check these items:**
+
+1. Start the app from `dashboard/` so `.streamlit/secrets.toml` is loaded:
+   `cd dashboard && streamlit run app.py`.
+2. Confirm the SQL warehouse is running and that `DATABRICKS_HTTP_PATH` starts
+   with `/sql/`.
+3. Execute `databricks/dashboard_views.sql` in Databricks SQL Editor.
+4. Confirm `earthquake_dev.gold.active_daily_metrics` and
+   `earthquake_dev.gold.active_watchlist` exist.
+""")
         st.stop()
     st.caption(f"Dashboard data loaded: {data['loaded_at']:%Y-%m-%d %H:%M UTC} "
                "· query cache up to 5 minutes · pipeline runs limited to the latest 500 in 30 days")
@@ -213,11 +257,6 @@ def main() -> None:
         pipeline(data["runs"], data["batches"], data["captures"])
     elif page == "Earthquake results":
         results(data["daily"], data["watchlist"])
-    else:
-        st.subheader("Maintenance")
-        st.info("Retention plans are currently written to the pipeline Volume, not a queryable "
-                "maintenance table. No verified maintenance history is available here yet.")
-        st.caption("The existing Maintenance Job remains a separate reviewed dry-run and apply workflow.")
 
 
 if __name__ == "__main__":
