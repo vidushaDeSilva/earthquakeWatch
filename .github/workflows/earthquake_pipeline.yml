@@ -1,0 +1,42 @@
+# One bounded hourly capture, Kafka transport, landing, and dispatch cycle.
+name: Earthquake Watch
+
+on:
+  schedule:
+    - cron: '17 * * * *' # Hourly at minute 17 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: earthquake-dev-pipeline
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  cycle:
+    if: vars.EQ_AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install transport dependencies
+        run: python -m pip install -e '.[kafka]'
+
+      - name: Capture, publish, land, and dispatch once
+        env:
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          AIVEN_BOOTSTRAP_SERVERS: ${{ vars.AIVEN_BOOTSTRAP_SERVERS }}
+          AIVEN_KAFKA_USERNAME: ${{ secrets.AIVEN_KAFKA_USERNAME }}
+          AIVEN_KAFKA_PASSWORD: ${{ secrets.AIVEN_KAFKA_PASSWORD }}
+          AIVEN_KAFKA_CA_PEM: ${{ secrets.AIVEN_KAFKA_CA_PEM }}
+          EQ_DATABRICKS_JOB_ID: ${{ vars.EQ_DATABRICKS_JOB_ID }}
+          EQ_PROCESSING_REVISION: ${{ vars.EQ_PROCESSING_REVISION }}
+        run: earthquake-watch cycle
