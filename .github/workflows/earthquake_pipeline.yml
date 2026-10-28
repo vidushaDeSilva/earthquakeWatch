@@ -16,6 +16,7 @@ jobs:
     if: vars.EQ_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
     permissions:
       contents: read
 
@@ -28,6 +29,88 @@ jobs:
 
       - name: Install transport dependencies
         run: python -m pip install -e '.[kafka]'
+
+      - name: Verify Databricks job access
+        env:
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          EQ_DATABRICKS_JOB_ID: ${{ vars.EQ_DATABRICKS_JOB_ID }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from urllib.error import HTTPError
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+
+          host = os.environ["DATABRICKS_HOST"].strip().rstrip("/")
+          token = os.environ["DATABRICKS_TOKEN"].strip()
+          job_id = os.environ["EQ_DATABRICKS_JOB_ID"].strip()
+
+          if not host.startswith("https://"):
+              raise SystemExit(
+                  "DATABRICKS_HOST must be an HTTPS Databricks workspace URL."
+              )
+
+          if not token:
+              raise SystemExit("DATABRICKS_TOKEN is empty.")
+
+          if not job_id.isdigit():
+              raise SystemExit(
+                  "EQ_DATABRICKS_JOB_ID must contain only the numeric Job ID."
+              )
+
+          url = (
+              f"{host}/api/2.2/jobs/get?"
+              + urlencode({"job_id": job_id})
+          )
+
+          request = Request(
+              url,
+              method="GET",
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/json",
+              },
+          )
+
+          try:
+              with urlopen(request, timeout=25) as response:
+                  result = json.load(response)
+          except HTTPError as exc:
+              response_body = exc.read().decode(
+                  "utf-8",
+                  errors="replace",
+              )
+
+              raise SystemExit(
+                  "Databricks job preflight failed. "
+                  f"HTTP status: {exc.code}. "
+                  f"Response: {response_body}"
+              ) from exc
+
+          returned_job_id = str(result.get("job_id", ""))
+          job_name = result.get("settings", {}).get(
+              "name",
+              "unknown",
+          )
+
+          if returned_job_id != job_id:
+              raise SystemExit(
+                  "Databricks returned a different Job ID: "
+                  f"{returned_job_id}"
+              )
+
+          print(
+              json.dumps(
+                  {
+                      "access": "OK",
+                      "job_id": returned_job_id,
+                      "job_name": job_name,
+                  }
+              )
+          )
+          PY
 
       - name: Capture, publish, land, and dispatch once
         env:
