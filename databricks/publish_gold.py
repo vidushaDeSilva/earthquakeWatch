@@ -179,7 +179,7 @@ def _pointer(spark: Any, publication_id: str, run_id: str, as_of: datetime) -> i
 
 
 def publish(spark: Any, batch_id: str, pipeline_run_id: str, revision: str,
-            policy_bytes: bytes) -> dict[str, Any]:
+            policy_bytes: bytes, processing_mode: str = "LIVE") -> dict[str, Any]:
     """Pin Silver, build candidate, gate it and expose only a validated release."""
     from pyspark.sql import functions as F
 
@@ -198,6 +198,12 @@ def publish(spark: Any, batch_id: str, pipeline_run_id: str, revision: str,
     if len(committed) != 1 or committed[0]["output_delta_version"] is None:
         raise ContractError("No unique committed Silver stage to pin")
     silver_version = committed[0]["output_delta_version"]
+    if processing_mode == "RECOVERY":
+        # The finalizer records recovered Bronze/Silver without a Gold candidate.
+        return {"processing_mode": "RECOVERY", "silver_delta_version": silver_version,
+                "publication_id": None, "pointer_generation": None}
+    if processing_mode != "LIVE":
+        raise ContractError("Unknown processing mode")
     # Once a candidate exists, retries reuse its original Silver snapshot even
     # if an upstream rerun emitted a later Delta commit for the same batch.
     prior_candidates = _rows(spark, _table("ops.publications"),
@@ -352,12 +358,13 @@ def main() -> None:
     parser.add_argument("--batch-id", required=True)
     parser.add_argument("--pipeline-run-id", required=True)
     parser.add_argument("--revision", required=True)
+    parser.add_argument("--processing-mode", choices=("LIVE", "RECOVERY"), required=True)
     parser.add_argument("--policy-path", required=True)
     args = parser.parse_args()
     from pyspark.sql import SparkSession
 
     result = publish(SparkSession.builder.getOrCreate(), args.batch_id,
-                     args.pipeline_run_id, args.revision, Path(args.policy_path).read_bytes())
+                     args.pipeline_run_id, args.revision, Path(args.policy_path).read_bytes(), args.processing_mode)
     print(json.dumps(result))
 
 

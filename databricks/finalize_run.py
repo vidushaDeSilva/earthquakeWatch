@@ -20,11 +20,15 @@ PRODUCT = "usgs-watchlist"
 
 
 def classify(stages: list[dict[str, Any]], checks: list[dict[str, Any]],
-             publications: list[dict[str, Any]], pointer_id: str | None) -> tuple[str, bool, str]:
+             publications: list[dict[str, Any]], pointer_id: str | None,
+             processing_mode: str = "LIVE") -> tuple[str, bool, str]:
     """Use committed evidence to distinguish success, quality, and unknown failure."""
     committed = {row["stage_name"] for row in stages if row["stage_status"] == "COMMITTED"}
     active = [row for row in publications if row["publication_status"] == "ACTIVE"
               and row["validation_status"] == "PASS" and row["publication_id"] == pointer_id]
+    if processing_mode == "RECOVERY" and {"BRONZE", "SILVER"} <= committed and not publications and not any(
+            row["check_status"] == "FAIL" and row["severity"] == "BLOCKER" for row in checks):
+        return "SUCCEEDED", False, "RECOVERED"
     if {"BRONZE", "SILVER", "GOLD"} <= committed and len(active) == 1 and not any(
             row["check_status"] == "FAIL" and row["severity"] == "BLOCKER" for row in checks):
         return "SUCCEEDED", False, "COMPLETE"
@@ -111,7 +115,10 @@ def finalize(spark: Any, volume: MountedVolume, batch_id: str, pipeline_run_id: 
     if len(pointers) > 1:
         raise ContractError("Serving pointer has duplicate product keys")
     pointer_id = pointers[0].active_publication_id if pointers else None
-    status, retryable, code = classify(stages, checks, publications, pointer_id)
+    mode = intent.get("processing_mode", "LIVE")
+    if mode not in ("LIVE", "RECOVERY"):
+        raise ContractError("Unknown processing mode in dispatch intent")
+    status, retryable, code = classify(stages, checks, publications, pointer_id, mode)
     if status == "FAILED":
         # A code failure can occur after validation but before activation. Make
         # every nonactive candidate terminal so it cannot be mistaken for a
@@ -137,6 +144,7 @@ def finalize(spark: Any, volume: MountedVolume, batch_id: str, pipeline_run_id: 
               "dispatch_id": dispatch_id, "attempt_no": attempt_no,
               "databricks_run_id": databricks_run_id,
               "batch_ids": [batch_id], "processing_revision": revision,
+              "processing_mode": mode, "completion_kind": code if status == "SUCCEEDED" else None,
               "input_manifest_sha256": intent["landing_manifest_sha256"],
               "policy_version": "impact-v1", "status": status,
               "retryable": retryable, "error_class": None if status == "SUCCEEDED" else code,

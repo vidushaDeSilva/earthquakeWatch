@@ -5,6 +5,15 @@ on:
   schedule:
     - cron: '17 * * * *' # Hourly at minute 17 UTC
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run the full cycle or dispatch one pending verified landing batch'
+        type: choice
+        required: true
+        default: dispatch-only
+        options:
+          - dispatch-only
+          - cycle
 
 concurrency:
   group: earthquake-dev-pipeline
@@ -13,7 +22,7 @@ concurrency:
 
 jobs:
   cycle:
-    if: vars.EQ_AUTOMATION_ENABLED == 'true'
+    if: github.event_name == 'workflow_dispatch' || vars.EQ_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -113,6 +122,7 @@ jobs:
           PY
 
       - name: Capture, publish, land, and dispatch once
+        if: github.event_name == 'schedule' || inputs.mode == 'cycle'
         env:
           DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -123,3 +133,12 @@ jobs:
           EQ_DATABRICKS_JOB_ID: ${{ vars.EQ_DATABRICKS_JOB_ID }}
           EQ_PROCESSING_REVISION: ${{ vars.EQ_PROCESSING_REVISION }}
         run: earthquake-watch cycle
+
+      - name: Dispatch one pending verified batch
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'dispatch-only'
+        env:
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          EQ_DATABRICKS_JOB_ID: ${{ vars.EQ_DATABRICKS_JOB_ID }}
+          EQ_PROCESSING_REVISION: ${{ vars.EQ_PROCESSING_REVISION }}
+        run: earthquake-watch dispatch-once

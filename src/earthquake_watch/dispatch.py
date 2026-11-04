@@ -124,7 +124,7 @@ def _submit(volume: EvidenceVolume, jobs: DatabricksJobs, intent: dict[str, Any]
         raise ContractError("Dispatch attempt identity changed")
     params = {"batch_id": intent["batch_id"], "pipeline_run_id": attempt["pipeline_run_id"],
               "revision": intent["revision"], "dispatch_id": dispatch_id,
-              "attempt_no": str(number)}
+              "attempt_no": str(number), "processing_mode": intent.get("processing_mode", "LIVE")}
     run_id = jobs.run_now(intent["job_id"], attempt["idempotency_token"], params)
     receipt = {"dispatch_id": dispatch_id, "attempt_no": number,
                "pipeline_run_id": attempt["pipeline_run_id"], "databricks_run_id": run_id,
@@ -212,15 +212,38 @@ def dispatch_once(volume: EvidenceVolume, jobs: DatabricksJobs, revision: str, j
     if not batches:
         return {"action": "NO_PENDING_BATCH"}
     _, batch_id, manifest = min(batches)
+    mode = classify_batch(volume, manifest, datetime.now(timezone.utc))
     dispatch_id = _identity(batch_id, revision)
     raw_manifest = volume.read_optional(f"landing/{batch_id}/manifest.json")
     assert raw_manifest is not None
     intent = {"dispatch_id": dispatch_id, "batch_id": batch_id,
-              "revision": revision, "job_id": job_id,
+              "revision": revision, "job_id": job_id, "processing_mode": mode,
               "landing_manifest_sha256": hashlib.sha256(raw_manifest).hexdigest(),
               "created_at": stamp(datetime.now(timezone.utc)), "record_count": manifest["record_count"]}
     volume.put_immutable(f"dispatch/{dispatch_id}/intent.json", json_bytes(intent))
     return _submit(volume, jobs, intent, 1)
+
+
+def classify_batch(volume: EvidenceVolume, manifest: dict[str, Any], now: datetime) -> str:
+    """Route old captures to recovery without weakening the live Gold gate."""
+    ids = manifest["capture_ids"]
+    if not ids:
+        raise ContractError("Landing batch has no capture lineage")
+    for capture_id in ids:
+        raw = volume.read_optional(f"captures/{capture_id}/manifest.json")
+        if raw is None:
+            raise ContractError("Landing capture manifest is missing")
+        try:
+            capture = json.loads(raw)
+            if capture["capture_id"] != capture_id or capture["state"] != "FROZEN":
+                raise ValueError("invalid capture identity")
+            generated = datetime.fromisoformat(capture["source_generated_at"].replace("Z", "+00:00"))
+            age = (now - generated).total_seconds()
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ContractError("Landing capture freshness evidence is invalid") from exc
+        if not 0 <= age <= 10800:
+            return "RECOVERY"
+    return "LIVE"
 
 
 def verify_dispatch(volume: EvidenceVolume, dispatch_id: str, attempt_no: int,

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from earthquake_watch.contracts import ContractError, json_bytes
-from earthquake_watch.dispatch import dispatch_once
+from earthquake_watch.dispatch import dispatch_once, classify_batch
 from earthquake_watch.landing import Delivery, freeze_landing
 from earthquake_watch.retention import (INCOMPLETE_DAYS, COMPLETED_FILES_DAYS,
                                         RECEIPTS_DAYS, BRONZE_DAYS, SILVER_DAYS,
@@ -68,7 +68,11 @@ class Jobs:
 def _landing():
     """Create a real verified batch in the in-memory Volume."""
     volume = MemoryVolume()
-    batch = freeze_landing([Delivery("earthquake_events_dev", 0, 0, b"us1", b"{}", NOW)],
+    cap = "a" * 64
+    volume.put_immutable(f"captures/{cap}/manifest.json", json_bytes({
+        "capture_id": cap, "state": "FROZEN", "source_generated_at": NOW.isoformat()}))
+    batch = freeze_landing([Delivery("earthquake_events_dev", 0, 0, b"us1",
+                                     json_bytes({"capture_id": cap}), NOW)],
                            volume, lambda: NOW)
     return volume, batch["landing_batch_id"]
 
@@ -130,6 +134,22 @@ def test_corrected_revision_can_reprocess_terminal_code_failure():
     second = dispatch_once(volume, jobs, "rev-2", 123)
     assert second["action"] == "SUBMITTED" and second["dispatch_id"] != first["dispatch_id"]
     assert jobs.calls[1][2]["batch_id"] == batch_id
+
+
+def test_stale_capture_routes_to_recovery_and_keeps_dispatch_identity():
+    """The same landed offsets are accounted for without a Gold publication."""
+    volume = MemoryVolume()
+    cap = "a" * 64
+    payload = json_bytes({"capture_id": cap})
+    manifest = freeze_landing([Delivery("earthquake_events_dev", 0, 0, b"us1", payload, NOW)], volume,
+                              lambda: NOW)
+    volume.put_immutable(f"captures/{cap}/manifest.json", json_bytes({
+        "capture_id": cap, "state": "FROZEN", "source_generated_at": "2026-10-20T08:00:00Z"}))
+    assert classify_batch(volume, manifest, NOW) == "RECOVERY"
+    jobs = Jobs()
+    dispatched = dispatch_once(volume, jobs, "rev-1", 123)
+    assert dispatched["action"] == "SUBMITTED"
+    assert jobs.calls[0][2]["processing_mode"] == "RECOVERY"
 
 
 def _metadata(age_days=40):
