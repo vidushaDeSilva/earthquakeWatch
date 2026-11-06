@@ -21,6 +21,34 @@ from dashboard.metrics import (as_utc, duration_minutes, landing_coverage,
 st.set_page_config(page_title="Earthquake Watch", page_icon="🌍", layout="wide")
 
 
+def apply_theme() -> None:
+    """Give the read-only dashboard a consistent earth-and-ocean visual theme."""
+    st.markdown("""<style>
+    :root { --ew-ink:#142b38; --ew-teal:#087f78; --ew-coral:#e97853; }
+    .stApp { background:linear-gradient(180deg,#edf5f4 0,#f8faf8 22rem,#f8faf8 100%);
+             color:var(--ew-ink); }
+    [data-testid="stSidebar"] { background:#102e3b; }
+    [data-testid="stSidebar"] * { color:#e7f4f1; }
+    [data-testid="stSidebar"] [data-testid="stRadio"] label { border-radius:9px; }
+    [data-testid="stHeader"] { background:transparent; }
+    h1,h2,h3 { color:#143b45; letter-spacing:-.025em; }
+    h1 { font-weight:750; }
+    div[data-testid="stMetric"] { background:#fff; border:1px solid #dce9e6;
+        border-top:3px solid #168f86; border-radius:14px; padding:1rem 1.1rem;
+        box-shadow:0 5px 20px rgba(19,59,69,.055); }
+    div[data-testid="stMetricLabel"] { color:#486871; }
+    div[data-testid="stMetricValue"] { color:#123c48; }
+    div[data-testid="stAlert"] { border-radius:12px; }
+    .ew-hero { background:linear-gradient(110deg,#103a48,#155c61 72%,#237d77);
+        color:#f4faf8; padding:1.45rem 1.7rem; border-radius:18px;
+        box-shadow:0 12px 28px rgba(17,55,65,.16); margin:.3rem 0 1.35rem; }
+    .ew-hero h1 { color:#fff; margin:0 0 .25rem; font-size:2.2rem; }
+    .ew-hero p { color:#d4e9e5; margin:0; max-width:66rem; }
+    .ew-kicker { color:#ffc39d; font-size:.76rem; font-weight:750;
+        letter-spacing:.15em; text-transform:uppercase; margin-bottom:.3rem; }
+    </style>""", unsafe_allow_html=True)
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def load(query: str, parameters: tuple[str, ...] = ()) -> list[dict]:
     """Cache only bounded results for five minutes; never cache credentials."""
@@ -155,22 +183,56 @@ def pipeline(runs: list[dict], batches: list[dict], captures: list[dict]) -> Non
 
 def results(daily: list[dict], watchlist: list[dict]) -> None:
     """Display only pointer-gated, validated Gold results."""
-    st.subheader("Published earthquake results")
-    try:
-        _, policy = load_context()
-        scope, rules = watchlist_explanation(policy)
-        st.markdown(f"**What counts as a watchlist earthquake?** {scope}")
-        st.markdown("\n".join(f"- {rule}" for rule in rules))
-        st.caption("PAGER red, orange, or yellow gives the label 'estimated impact'; "
-                   "the other signals alone give 'potential impact'. These are "
-                   "prioritization labels, not a confirmation of damage or an alert.")
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        st.error(f"Could not load the impact policy explanation: {type(exc).__name__}. "
-                 "Check config/impact_policy_v1.json in this repository.")
+    st.subheader("Current earthquake watchlist")
+    st.caption("Only earthquakes selected by the active, validated Gold publication appear here. "
+               "Map position is the reported epicentre; it is not an affected-area estimate.")
     if daily:
         publication_ids = {r["publication_id"] for r in daily}
         st.caption(f"Active publication: {', '.join(sorted(publication_ids))} · "
                    f"as of {timestamp(max((r.get('as_of_utc') for r in daily if r.get('as_of_utc')), default=None))}")
+
+    if watchlist:
+        labels = sorted({str(r.get("impact_label")) for r in watchlist if r.get("impact_label")})
+        selected = st.multiselect("Impact label", labels, default=labels)
+        shown = [r for r in watchlist if r.get("impact_label") in selected]
+        magnitudes = [float(r["magnitude"]) for r in shown if r.get("magnitude") is not None]
+        times = [as_utc(r.get("event_time")) for r in shown]
+        a, b, c = st.columns(3)
+        a.metric("Events on map", len(shown))
+        b.metric("Strongest magnitude", f"M {max(magnitudes):.1f}" if magnitudes else "Unavailable")
+        c.metric("Most recent origin", timestamp(max((t for t in times if t), default=None)))
+        points = pd.DataFrame(shown).reindex(columns=["latitude", "longitude"])
+        points = points.apply(pd.to_numeric, errors="coerce").dropna()
+        points = points[points["latitude"].between(-90, 90) &
+                        points["longitude"].between(-180, 180)]
+        if not points.empty:
+            st.map(points, latitude="latitude", longitude="longitude", color="#e97853",
+                   use_container_width=True)
+            st.caption(f"{len(points)} located events shown · map uses the current watchlist only")
+        else:
+            st.info("No mapped coordinates are available for the selected events.")
+        st.markdown("#### Event details")
+        table(shown, ["event_time", "place", "magnitude", "depth_km", "latitude",
+                      "longitude", "impact_label", "selection_reasons", "pager_alert",
+                      "max_mmi", "tsunami_flag", "significance", "usgs_event_id"])
+    else:
+        st.info("No earthquakes met the watchlist policy in the active publication.")
+
+    with st.expander("How events qualify for this watchlist"):
+        try:
+            _, policy = load_context()
+            scope, rules = watchlist_explanation(policy)
+            st.markdown(f"**Selection scope:** {scope}")
+            st.markdown("\n".join(f"- {rule}" for rule in rules))
+            st.caption("PAGER red, orange, or yellow gives the label 'estimated impact'; "
+                       "other signals alone give 'potential impact'. These are prioritization "
+                       "labels, not confirmation of damage or an alert.")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            st.error(f"Could not load the impact policy explanation: {type(exc).__name__}. "
+                     "Check config/impact_policy_v1.json in this repository.")
+
+    st.subheader("Daily publication metrics")
+    if daily:
         dates = sorted(r["metric_date"] for r in daily)
         selected_dates = st.date_input("Metric dates (UTC)", value=(dates[0], dates[-1]),
                                        min_value=dates[0], max_value=dates[-1])
@@ -188,39 +250,20 @@ def results(daily: list[dict], watchlist: list[dict]) -> None:
     else:
         st.info("There are no rows in the active daily metrics view.")
 
-    st.subheader("Current watchlist")
-    if not watchlist:
-        st.info("No earthquakes met the watchlist policy in the active publication.")
-        return
-    labels = sorted({r.get("impact_label") for r in watchlist if r.get("impact_label")})
-    selected = st.multiselect("Impact label", labels, default=labels)
-    shown = [r for r in watchlist if r.get("impact_label") in selected]
-    table(shown, ["event_time", "place", "magnitude", "significance", "pager_alert",
-                  "impact_label", "selection_reasons", "rank_priority", "depth_km",
-                  "latitude", "longitude", "usgs_event_id"])
-    if shown:
-        st.map(pd.DataFrame(shown)[["latitude", "longitude"]].dropna(),
-               latitude="latitude", longitude="longitude")
-
 
 def main() -> None:
     """Load one bounded snapshot and expose three read-only dashboard pages."""
-    st.title("Earthquake Watch")
-    try:
-        source, _ = load_context()
-        st.markdown("Earthquake Watch polls the [USGS all-day GeoJSON feed]"
-                    f"({source['source_url']}) each hour. Each source record describes "
-                    "an earthquake's origin time, location, magnitude, depth and "
-                    "available impact signals. The pipeline transports deliveries "
-                    "through Kafka, resolves current event versions in Databricks, "
-                    "and publishes a validated rolling 24-hour summary.")
-    except (OSError, ValueError, KeyError, TypeError):
-        st.warning("Source description unavailable. Check config/source_usgs_all_day.json.")
+    apply_theme()
+    st.markdown('<div class="ew-hero"><div class="ew-kicker">Live Earthquake Intelligence</div>'
+                '<h1>Earthquake Watch</h1><p>A clear view of the latest validated '
+                'earthquake watchlist and the pipeline behind it.</p></div>',
+                unsafe_allow_html=True)
     if st.sidebar.button("Refresh data"):
         load.clear()
         snapshot.clear()
         st.rerun()
-    page = st.sidebar.radio("View", ["Overview", "Pipeline runs", "Earthquake results"])
+    # The first option is the initial page for each new Streamlit session.
+    page = st.sidebar.radio("View", ["Earthquake results", "Overview", "Pipeline runs"])
     try:
         data = snapshot()
     except Exception as exc:
